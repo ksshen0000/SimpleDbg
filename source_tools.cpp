@@ -355,8 +355,18 @@ std::string run_source_tool(const std::vector<std::string>& arguments) {
             output.append(bytes, count);
             if (output.size() > tool_output_limit) throw std::runtime_error("source tool output exceeds 16 MiB limit");
         }
-        while (waitpid(child, &status, 0) < 0) {
-            if (errno != EINTR) throw std::runtime_error("cannot wait for source tool");
+        auto wait_deadline = std::chrono::steady_clock::now() + one_shot_timeout;
+        for (;;) {
+            pid_t result = waitpid(child, &status, WNOHANG);
+            if (result == child) break;
+            if (result < 0) {
+                if (errno == EINTR) continue;
+                throw std::runtime_error("cannot wait for source tool");
+            }
+            if (std::chrono::steady_clock::now() >= wait_deadline)
+                throw std::runtime_error("source tool did not exit");
+            pollfd idle{-1, 0, 0};
+            poll(&idle, 0, 10);
         }
     } catch (...) {
         kill(child, SIGKILL);

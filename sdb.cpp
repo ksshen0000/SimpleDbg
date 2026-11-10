@@ -213,7 +213,7 @@ void print_help(const std::string& topic) {
         {"si", "si\nSingle-step one instruction.\n"},
         {"next", "next / ni (alias n)\nStep over a call by running to the return address.\n"},
         {"finish", "finish (alias f)\nRun until the current function returns; requires a recognizable frame.\n"},
-        {"bt", "bt\nPrint up to 64 frame-pointer backtrace frames with ELF symbols.\n"},
+        {"bt", "bt [frames]\nPrint up to 64 (or the given 1..256) frame-pointer frames with ELF symbols.\n"},
         {"where", "where\nShow the source location of the current instruction (requires DWARF).\n"},
         {"list", "list\nShow the source around the current instruction (requires DWARF).\n"},
         {"step", "step (alias s)\nStep one source line, executing at most 256 instructions.\n"},
@@ -681,6 +681,15 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                     line = static_cast<unsigned>(requested);
                 }
                 show_source(true, line);
+            } else if (command == "bt") {
+                if (args.size() > 2) throw std::runtime_error("usage: bt [frames]");
+                unsigned frames = 64;
+                if (args.size() == 2) {
+                    uint64_t value = parse_number(args[1], 10);
+                    if (!value || value > 256) throw std::runtime_error("frame limit must be 1..256");
+                    frames = static_cast<unsigned>(value);
+                }
+                backtrace(frames);
             } else if (command == "info") {
                 process_info(args);
             } else {
@@ -689,7 +698,6 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                 if (command == "si") single_step();
                 else if (command == "next" || command == "ni") next_instruction();
                 else if (command == "finish") finish_frame();
-                else if (command == "bt") backtrace();
                 else if (command == "where") show_source(false);
                 else if (command == "step") source_step();
                 else if (command == "cont") {

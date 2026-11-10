@@ -130,7 +130,7 @@ void Debugger::finish_frame() {
     run_until(caller.first, r.rsp + 8);
 }
 
-void Debugger::backtrace() {
+void Debugger::backtrace(unsigned max_frames) {
     auto objects = loaded_objects(child_);
     auto describe = [&](Address address) {
         for (const auto& object : objects) {
@@ -152,7 +152,7 @@ void Debugger::backtrace() {
         auto caller = caller_frame(false);
         Address frame = caller.second;
         std::set<Address> visited;
-        for (unsigned depth = 1; depth < 64 && caller.first; ++depth) {
+        for (unsigned depth = 1; depth < max_frames && caller.first; ++depth) {
             require_executable(caller.first);
             std::cout << '#' << depth << "  0x" << std::hex << caller.first << std::dec
                       << " " << describe(caller.first - 1) << '\n';

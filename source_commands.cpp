@@ -51,19 +51,34 @@ Address Debugger::resolve_source(const std::string& request) {
     auto line = std::stoul(request.substr(colon + 1));
     if (!line || line > UINT32_MAX) throw std::runtime_error("invalid source line");
     std::vector<Address> candidates;
+    std::string failure;
     for (const auto& object : loaded_objects(child_)) {
-        auto addresses = source_addresses(object.path, filename, line);
+        std::vector<Address> addresses;
+        try { addresses = source_addresses(object.path, filename, line); }
+        catch (const std::exception& error) {
+            // One unreadable object must not hide candidates in the others.
+            if (failure.empty()) failure = error.what();
+            continue;
+        }
         if (addresses.empty()) continue;
         // Verify the full recorded path when one was requested; decodedline
         // frequently prints basenames even for an absolute source filename.
         if (filename.find('/') != std::string::npos) {
-            auto resolved = source_location(object.path, addresses.front());
-            if (resolved.substr(0, resolved.find_last_of(':')) != filename) continue;
+            try {
+                auto resolved = source_location(object.path, addresses.front());
+                if (resolved.substr(0, resolved.find_last_of(':')) != filename) continue;
+            } catch (const std::exception& error) {
+                if (failure.empty()) failure = error.what();
+                continue;
+            }
         }
         if (addresses.front() > UINT64_MAX - object.bias) throw std::runtime_error("source address overflow");
         candidates.push_back(addresses.front() + object.bias);
     }
-    if (candidates.empty()) throw std::runtime_error("source line not found in loaded objects; rebuild with -g");
+    if (candidates.empty()) {
+        if (!failure.empty()) throw std::runtime_error("source line lookup failed: " + failure);
+        throw std::runtime_error("source line not found in loaded objects; rebuild with -g");
+    }
     if (candidates.size() != 1) throw std::runtime_error("ambiguous source file; use an absolute source path");
     return candidates.front();
 }

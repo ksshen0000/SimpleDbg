@@ -108,7 +108,7 @@ private:
     Address resolve_source(const std::string& request);
     void source_step();
     void finish_frame();
-    void backtrace();
+    void backtrace(unsigned max_frames = 64);
     std::pair<Address, Address> caller_frame(bool verify = true);
     void set_value(const std::vector<std::string>& args);
     void write_memory(Address address, const std::vector<uint8_t>& bytes);
