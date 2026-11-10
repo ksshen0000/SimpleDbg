@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；86 项测试
-  （集成 53、工作流 25、故障注入 8）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；87 项测试
+  （集成 53、工作流 26、故障注入 8）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -178,3 +178,9 @@ python3 tests/bench.py --sdb build-release/sdb
 - `resolve_source` 隔离单个对象的行表/路径校验失败，继续尝试其他对象；全部失败时报告
   首个原因。
 - 回归：限深回溯与非法帧数；测试总数保持 86。
+
+### 批次 14：深递归回溯边界
+
+- 新增 100 层递归目标与 `bt` 回归：验证最多输出 64 帧（含 `#63`、不含 `#64`）、
+  recurse 帧数量受控，并能正常 `finish`/继续退出。
+- 测试总数 87。

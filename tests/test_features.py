@@ -63,6 +63,7 @@ int main(int argc, char **argv) {
         return cross_ptr[0] == 0x44 && cross_ptr[1] == 0x33 ? 0 : 93;
     }
     if (mode == 'q') { counter = 5; ready(); return counter; }
+    if (mode == 'z') { recurse(100); return 0; }
     if (mode == 'x') {
         code_ptr = mmap(0,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
         if (code_ptr == MAP_FAILED) return 90;
@@ -213,6 +214,18 @@ int main(void) {
         self.assertIn("size 4", s.command("info watchpoints"))
         s.command("unwatch 1")
         self.assertIn("exited with status 1", s.command("cont"))
+
+    def test_deep_backtrace_is_bounded(self):
+        s = self.session("zen")
+        s.command("break leaf")
+        s.command("cont")
+        output = s.command("bt")
+        self.assertIn("leaf+", output)
+        self.assertIn("#63", output)
+        self.assertNotIn("#64", output)
+        self.assertLessEqual(output.count("recurse+"), 64, output)
+        s.command("finish")
+        self.assertIn("exited with status 0", s.command("cont"))
 
     def test_read_watchpoint_stops_on_read(self):
         s = self.session("quiet")

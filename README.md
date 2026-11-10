@@ -17,7 +17,7 @@ ctest --test-dir build --output-on-failure
 静态测试目标还需要静态 C 库（Debian/Ubuntu 通常由 `libc6-dev` 提供，Fedora/RHEL 为
 `glibc-static`）。缺少时 `static`/`static-pie` 用例会跳过并打印原因，其余测试照常运行。
 测试需要允许父进程跟踪自己的子进程。容器可能需要相应的 ptrace/seccomp 配置。
-三个测试组（53/25/8 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
+三个测试组（53/26/8 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
 错误注入只链接到测试程序 `sdb-fault`，生产程序 `sdb` 不包含注入入口。
 
 仅构建 Release 程序，不构建测试工具：
