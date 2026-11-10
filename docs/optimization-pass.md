@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；80 项测试
-  （集成 51、工作流 22、故障注入 7）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；82 项测试
+  （集成 51、工作流 24、故障注入 7）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -131,3 +131,10 @@ python3 tests/bench.py --sdb build-release/sdb
 - 符号查询保持原有“不打印地址边界警告”的行为；只有原始地址、寄存器和偏移表达式才提示
   无法验证指令边界。
 - 新增集成测试覆盖偏移、下溢与未知寄存器；测试总数 80。
+
+### 批次 7：读/访问监视点
+
+- 新增 `rwatch`/`awatch`：使用 x86 调试寄存器 RW=11b（读写）编码；`watch` 保持 RW=01b
+  （只写）。x86 没有只读数据监视点，因此读访问配置在写时也会命中。
+- 监视点记录模式，命中消息与 `info watchpoints` 显示 `(write)`/`(read)`。
+- 新增回归：读监视点在读取时命中、写监视点忽略后续读取；测试总数 82。

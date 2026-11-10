@@ -243,7 +243,9 @@ void Debugger::watch_command(const std::vector<std::string>& args) {
         std::cout << "** watchpoint removed.\n";
         return;
     }
-    if (args.size() < 2 || args.size() > 3) throw std::runtime_error("usage: watch <address|symbol> [1|2|4|8]");
+    if (args.size() < 2 || args.size() > 3)
+        throw std::runtime_error("usage: watch/rwatch/awatch <address|symbol> [1|2|4|8]");
+    const bool reading = args[0] == "rwatch" || args[0] == "awatch";
     auto size = args.size() == 3 ? number(args[2], 10) : 4;
     if (size != 1 && size != 2 && size != 4 && size != 8) throw std::runtime_error("watchpoint size must be 1, 2, 4, or 8");
     auto address = resolve_address(args[1]);
@@ -254,12 +256,14 @@ void Debugger::watch_command(const std::vector<std::string>& args) {
     if (slot == 4) throw std::runtime_error("all four hardware watchpoint slots are in use");
     unsigned length = size == 8 ? 2 : size == 4 ? 3 : size == 2 ? 1 : 0;
     auto old_address = static_cast<unsigned long>(trace(PTRACE_PEEKUSER, debug_base + slot * sizeof(unsigned long)));
-    auto inserted = watches_.emplace(slot, Watchpoint{next_watch_id_, address, static_cast<size_t>(size)});
+    auto inserted = watches_.emplace(slot, Watchpoint{next_watch_id_, address, static_cast<size_t>(size), reading});
     try {
         put(slot, address);
         auto updated = control & ~(15ul << (16 + 4 * slot));
-        updated |= 1ul << (2 * slot); // Local enable; write-only data watchpoint.
-        updated |= static_cast<unsigned long>(1 | (length << 2)) << (16 + 4 * slot);
+        updated |= 1ul << (2 * slot); // Local enable.
+        // RW encoding: 01 = write only, 11 = read/write. x86 has no read-only
+        // data watchpoint, so rwatch and awatch share the read/write encoding.
+        updated |= static_cast<unsigned long>((reading ? 3 : 1) | (length << 2)) << (16 + 4 * slot);
         put(7, updated);
     } catch (...) {
         watches_.erase(inserted.first);
@@ -267,7 +271,8 @@ void Debugger::watch_command(const std::vector<std::string>& args) {
         catch (...) { cleanup(); throw std::runtime_error("watchpoint rollback failed; target terminated"); }
         throw;
     }
-    std::cout << "** set watchpoint " << next_watch_id_++ << " at 0x" << std::hex << address << std::dec << " size " << size << ".\n";
+    std::cout << "** set watchpoint " << next_watch_id_++ << " (" << (reading ? "read" : "write")
+              << ") at 0x" << std::hex << address << std::dec << " size " << size << ".\n";
 }
 
 void Debugger::catch_command(const std::vector<std::string>& args) {

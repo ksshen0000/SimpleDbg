@@ -62,6 +62,7 @@ int main(int argc, char **argv) {
         ready();
         return cross_ptr[0] == 0x44 && cross_ptr[1] == 0x33 ? 0 : 93;
     }
+    if (mode == 'q') { counter = 5; ready(); return counter; }
     if (mode == 'x') {
         code_ptr = mmap(0,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
         if (code_ptr == MAP_FAILED) return 90;
@@ -207,6 +208,22 @@ int main(void) {
         self.assertIn("size 4", s.command("info watchpoints"))
         s.command("unwatch 1")
         self.assertIn("exited with status 1", s.command("cont"))
+
+    def test_read_watchpoint_stops_on_read(self):
+        s = self.session("quiet")
+        s.command("break ready")
+        s.command("cont")
+        self.assertIn("set watchpoint 1 (read)", s.command("rwatch counter 4"))
+        self.assertIn("read", s.command("info watchpoints"))
+        self.assertIn("hit watchpoint 1 (read)", s.command("cont"))
+        self.assertIn("exited with status 5", s.command("cont"))
+
+    def test_write_watchpoint_ignores_a_later_read(self):
+        s = self.session("quiet")
+        s.command("break ready")
+        s.command("cont")
+        self.assertIn("set watchpoint 1 (write)", s.command("watch counter 4"))
+        self.assertIn("exited with status 5", s.command("cont"))
 
     def test_watchpoint_resource_limits(self):
         s = self.session()

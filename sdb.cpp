@@ -105,7 +105,7 @@ void print_help(const std::string& topic) {
             "where, list, step (source line; requires binutils and DWARF)\n"
             "regs [register|fp], x <address|symbol|$register> [decimal byte count]\n"
             "set $register = <unsigned integer>; set mem <address|symbol> <hexbytes>; set disasm on|off\n"
-            "watch <address|symbol> [1|2|4|8], unwatch <id>, catch syscall [all|off|number]\n"
+            "watch/rwatch <address|symbol> [1|2|4|8], unwatch <id>, catch syscall [all|off|number]\n"
             "info breakpoints/watchpoints/registers/proc/sharedlibrary; info proc mappings\n"
             "delete/enable/disable <breakpoint id>, delete all, anchor, timetravel, quit\n"
             "Symbol breakpoints require code; raw addresses require an instruction boundary.\n"
@@ -133,6 +133,8 @@ void print_help(const std::string& topic) {
                 "Registers are decimal or 0x-hex; memory writes use raw hexadecimal bytes without 0x.\n"
                 "set disasm controls the automatic 5-instruction dump after each command.\n"},
         {"watch", "watch <address|symbol> [1|2|4|8]\nSet a hardware write watchpoint (four slots, aligned address).\n"},
+        {"rwatch", "rwatch <address|symbol> [1|2|4|8]\nSet a read watchpoint. x86 has no read-only watchpoint, so writes also trigger.\n"},
+        {"awatch", "awatch <address|symbol> [1|2|4|8]\nSet a read/write (access) watchpoint; same encoding as rwatch.\n"},
         {"unwatch", "unwatch <watchpoint id>\nRemove a hardware watchpoint.\n"},
         {"catch", "catch syscall [all|off|decimal number]\nCapture syscall entries and exits (Linux 5.3+).\n"},
         {"info", "info breakpoints | watchpoints | registers [name] | proc [mappings] | sharedlibrary\n"
@@ -312,7 +314,8 @@ bool Debugger::wait_stop(bool stepping) {
             for (const auto& [slot, watch] : watches_) {
                 if (status & (1ul << slot)) {
                     watch_hit_ = true;
-                    std::cout << "** hit watchpoint " << watch.id << " at 0x" << std::hex << watch.address << std::dec << ".\n";
+                    std::cout << "** hit watchpoint " << watch.id << " (" << (watch.read ? "read" : "write")
+                              << ") at 0x" << std::hex << watch.address << std::dec << ".\n";
                 }
             }
             if (watch_hit_) { signal_ = 0; return true; }
@@ -539,7 +542,7 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                 } else {
                     set_value(args);
                 }
-            } else if (command == "watch" || command == "unwatch") {
+            } else if (command == "watch" || command == "rwatch" || command == "awatch" || command == "unwatch") {
                 watch_command(args);
             } else if (command == "catch") {
                 catch_command(args);
@@ -838,7 +841,8 @@ void Debugger::process_info(const std::vector<std::string>& args) {
     if (args == std::vector<std::string>{"info", "breakpoints"}) { list_breakpoints(); return; }
     if (args == std::vector<std::string>{"info", "watchpoints"}) {
         for (const auto& [slot, watch] : watches_)
-            std::cout << watch.id << "  0x" << std::hex << watch.address << std::dec << " size " << watch.size << '\n';
+            std::cout << watch.id << "  0x" << std::hex << watch.address << std::dec << " size " << watch.size
+                      << (watch.read ? " read" : " write") << '\n';
         if (watches_.empty()) std::cout << "** no watchpoints.\n";
     } else if (args == std::vector<std::string>{"info", "proc"}) {
         std::cout << "PID: " << child_ << "\nPPID: " << getpid() << "\nExecutable: " << executable_

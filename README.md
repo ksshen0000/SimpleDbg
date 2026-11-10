@@ -17,7 +17,7 @@ ctest --test-dir build --output-on-failure
 静态测试目标还需要静态 C 库（Debian/Ubuntu 通常由 `libc6-dev` 提供，Fedora/RHEL 为
 `glibc-static`）。缺少时 `static`/`static-pie` 用例会跳过并打印原因，其余测试照常运行。
 测试需要允许父进程跟踪自己的子进程。容器可能需要相应的 ptrace/seccomp 配置。
-三个测试组（51/22/7 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
+三个测试组（51/24/7 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
 错误注入只链接到测试程序 `sdb-fault`，生产程序 `sdb` 不包含注入入口。
 
 仅构建 Release 程序，不构建测试工具：
@@ -62,6 +62,7 @@ PID、入口地址和加载偏移。反汇编直接读取运行内存，不要�
 | `set mem counter 2a000000` | 按原始字节修改内存（示例为小端 int 42） |
 | `set disasm on|off` | 开关每条命令后的 5 条自动反汇编（默认开） |
 | `watch counter [大小]` | 硬件写监视点，默认 4 字节，大小支持 1/2/4/8 |
+| `rwatch` / `awatch counter [大小]` | 硬件读 / 访问监视点；x86 没有只读数据监视点，读配置在写时也会触发 |
 | `unwatch 编号` | 删除硬件监视点 |
 | `catch syscall [all/off/编号]` | 捕获 syscall 入口和出口；编号为十进制 Linux x86-64 syscall 号 |
 | `info breakpoints` / `info watchpoints` | 查看断点 / 监视点 |
@@ -150,7 +151,9 @@ cont
 不可写/只读/共享/代码/未映射范围整体拒绝；执行中途出错会回滚已写机器字。
 如果连回滚也失败，会明确终止目标，避免继续执行部分修改的状态。
 
-硬件 watchpoint 是**目标执行写操作后**停止，最多四个槽位；地址必须按大小对齐。
+硬件 watchpoint 在**目标执行匹配访问后**停止：`watch` 只匹配写，`rwatch`/`awatch` 匹配
+读写（x86 调试寄存器不提供只读数据监视点，因此读配置在写时也会停止）。最多四个槽位，地址必须按大小对齐。
+`info watchpoints` 与命中消息会标出 write/read 模式。
 调试器自身的 ptrace 内存修改不会触发 CPU 写监视点。监视点与软件断点分开编号。
 目前不提供只读/读写监视点或条件表达式。
 

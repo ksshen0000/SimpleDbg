@@ -114,7 +114,7 @@ private:
     void write_memory(Address address, const std::vector<uint8_t>& bytes);
     void require_writable(Address address, size_t size);
     void watch_command(const std::vector<std::string>& args);
-    struct Watchpoint { unsigned id; Address address; size_t size; };
+    struct Watchpoint { unsigned id; Address address; size_t size; bool read = false; };
     std::map<unsigned, Watchpoint> watches_;
     unsigned next_watch_id_ = 1;
     bool watch_hit_ = false;
