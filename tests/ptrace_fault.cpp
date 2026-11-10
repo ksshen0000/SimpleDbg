@@ -12,9 +12,12 @@ extern "C" long __real_ptrace(enum __ptrace_request request, ...);
 extern "C" ssize_t __real_process_vm_writev(pid_t pid, const struct iovec* local, unsigned long local_count,
                                             const struct iovec* remote, unsigned long remote_count,
                                             unsigned long flags);
+extern "C" ssize_t __real_process_vm_readv(pid_t pid, const struct iovec* local, unsigned long local_count,
+                                           const struct iovec* remote, unsigned long remote_count,
+                                           unsigned long flags);
 
 namespace {
-enum Target : unsigned { kPoke = 0, kXState = 1, kSyscallInfo = 2, kVmWrite = 3 };
+enum Target : unsigned { kPoke = 0, kXState = 1, kSyscallInfo = 2, kVmWrite = 3, kVmRead = 4 };
 struct Config {
     bool configured = false;
     unsigned selected = kPoke;
@@ -37,7 +40,10 @@ bool trigger(unsigned target) {
         if (std::fscanf(file, "%15s %u %u", mode, &state.first, &state.second) >= 2) {
             if (mode[0] == 'x') state.selected = kXState;
             else if (mode[0] == 's') state.selected = kSyscallInfo;
-            else if (mode[0] == 'v' || mode[0] == 'e') {
+            else if (mode[0] == 'r') {
+                state.selected = kVmRead;
+                state.error = ENOSYS; // simulate a kernel without process_vm_readv
+            } else if (mode[0] == 'v' || mode[0] == 'e') {
                 state.selected = kVmWrite;
                 // "e" simulates a kernel without process_vm_writev so the
                 // debugger exercises its ptrace fallback.
@@ -74,4 +80,11 @@ extern "C" ssize_t __wrap_process_vm_writev(pid_t pid, const struct iovec* local
                                             unsigned long flags) {
     if (trigger(kVmWrite)) { errno = config().error; return -1; }
     return __real_process_vm_writev(pid, local, local_count, remote, remote_count, flags);
+}
+
+extern "C" ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec* local, unsigned long local_count,
+                                           const struct iovec* remote, unsigned long remote_count,
+                                           unsigned long flags) {
+    if (trigger(kVmRead)) { errno = config().error; return -1; }
+    return __real_process_vm_readv(pid, local, local_count, remote, remote_count, flags);
 }

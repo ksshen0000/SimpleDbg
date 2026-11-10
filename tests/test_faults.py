@@ -69,6 +69,21 @@ int main(void) { ready(); return counter; }
         self.assertEqual(before, s.command("regs xmm0"))
         self.assertIn("exited with status 6", s.command("cont"))
 
+    def test_reads_fall_back_when_bulk_read_is_unavailable(self):
+        control = self.root / self._testMethodName
+        control.write_text("r 1 0")
+        os.environ["SDB_FAULT_FILE"] = str(control)
+        try:
+            s = harness.Session(self.target)
+        finally:
+            del os.environ["SDB_FAULT_FILE"]
+        self.addCleanup(s.close)
+        self.assertIn("loaded. entry point", s.initial)
+        self.assertIn("set a breakpoint", s.command("break ready"))
+        self.assertIn("hit a breakpoint", s.command("cont"))
+        self.assertIn(": 00 00 00 00", s.command("x counter 4"))
+        self.assertIn("exited with status 0", s.command("cont"))
+
     def test_snapshot_falls_back_when_bulk_write_is_unavailable(self):
         s, control = self.session()
         s.command("anchor")

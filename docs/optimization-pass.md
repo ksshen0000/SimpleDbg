@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；82 项测试
-  （集成 51、工作流 24、故障注入 7）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；83 项测试
+  （集成 51、工作流 24、故障注入 8）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -145,3 +145,9 @@ python3 tests/bench.py --sdb build-release/sdb
   保留原有数字与返回值文本，兼容现有脚本。
 - `info breakpoints` 在符号描述后追加可用源码位置（`at 文件:行`）。
 - 扩展回归断言；测试总数保持 82。
+
+### 批次 9：批量读回退故障注入
+
+- 测试链接新增 `--wrap=process_vm_readv`；`r 1 0` 用 `ENOSYS` 模拟不支持批量读的内核，
+  验证启动反汇编、`x` 和断点流程仍能通过 ptrace 回退工作。
+- 测试总数 83。
