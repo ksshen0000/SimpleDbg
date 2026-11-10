@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；74 项测试
-  （集成 46、工作流 21、故障注入 7）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；75 项测试
+  （集成 47、工作流 21、故障注入 7）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -79,3 +79,15 @@ python3 tests/bench.py --sdb build-release/sdb
 - ELF 符号仍一次解析整张符号表（libc 约 1.1 万符号，Release 首次约 15 ms）。
 - 命令分发、帮助和别名仍是 if/else；readline 历史/补全未实现。
 - attach、core、remote 与完整多线程仍按 README 的边界未实现。
+
+## 6. 后续增量（持续优化）
+
+### 批次 1：命令行可用性
+
+- `help [command]` 提供单条命令帮助；未知主题给出明确错误。
+- 命令别名：`b`=break、`c`=cont、`s`=step、`n`/`ni`=next、`f`=finish、`i`=info、`h`=help、
+  `del`=delete、`q`=quit。解析后先把命令字规范化，保证 `i breakpoints` 这类完整参数匹配
+  仍然生效。
+- `delete all` 批量删除断点并尽量恢复原始字节；恢复失败时给出计数告警。
+- `info breakpoints` 追加 ELF 符号描述（如 `work+0`），不改变原有列格式。
+- 新增集成测试覆盖别名、单命令帮助、`delete all` 与符号描述；测试总数 75。

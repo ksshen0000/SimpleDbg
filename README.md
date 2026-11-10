@@ -17,7 +17,7 @@ ctest --test-dir build --output-on-failure
 静态测试目标还需要静态 C 库（Debian/Ubuntu 通常由 `libc6-dev` 提供，Fedora/RHEL 为
 `glibc-static`）。缺少时 `static`/`static-pie` 用例会跳过并打印原因，其余测试照常运行。
 测试需要允许父进程跟踪自己的子进程。容器可能需要相应的 ptrace/seccomp 配置。
-三个测试组（46/21/7 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
+三个测试组（47/21/7 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
 错误注入只链接到测试程序 `sdb-fault`，生产程序 `sdb` 不包含注入入口。
 
 仅构建 Release 程序，不构建测试工具：
@@ -65,11 +65,14 @@ PID、入口地址和加载偏移。反汇编直接读取运行内存，不要�
 | `info breakpoints` / `info watchpoints` | 查看断点 / 监视点 |
 | `info proc` | PID、PPID、可执行路径、入口和加载偏移 |
 | `info proc mappings` / `info sharedlibrary` | 映射 / 已加载 ELF 对象、加载偏移及符号状态 |
-| `delete/enable/disable 编号` | 管理软件断点 |
+| `delete 编号` / `delete all` | 删除软件断点（all 删除全部并恢复原始字节） |
+| `enable/disable 编号` | 启用 / 暂停软件断点 |
 | `anchor` / `timetravel` | 保存 / 恢复最近的受限快照 |
-| `help` / `quit` / `q` / EOF | 帮助 / 退出并清理目标 |
+| `help [命令]` / `quit` / `q` / EOF | 总帮助或单条命令帮助 / 退出并清理目标 |
 
 命令参数目前按空白切分；包含空格的源码路径可先使用不含空格且无歧义的文件名。
+常用别名：`b`=break、`c`=cont、`s`=step、`n`=next、`f`=finish、`i`=info、`h`=help、`del`=delete；
+`help <命令>` 查看单条命令用法，`info breakpoints` 在可解析时附带 ELF 符号描述。
 
 ## 常用调试流程
 

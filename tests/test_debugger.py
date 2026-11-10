@@ -360,6 +360,19 @@ second:
         self.assertIn("already exists", s.command(f"break {address:x}"))
         self.assertIn("hit a breakpoint", s.command("cont"))
 
+    def test_help_topics_aliases_and_delete_all(self):
+        s = self.session()
+        self.assertIn("Set a software breakpoint", s.command("help b"))
+        self.assertIn("no help for", s.command("help nosuch"))
+        self.assertIn("set a breakpoint", s.command("b tick"))
+        self.assertIn("set a breakpoint", s.command("b main"))
+        listing = s.command("i breakpoints")
+        self.assertIn("tick", listing)
+        self.assertIn("main", listing)
+        self.assertIn("deleted 2", s.command("delete all"))
+        self.assertIn("no breakpoints", s.command("i breakpoints"))
+        self.assertIn("exited with status 3", s.command("c"))
+
     def test_signal_delivery_and_arguments(self):
         s = self.session("pie", "signal")
         self.assertIn("stopped by signal 10", s.command("cont"))

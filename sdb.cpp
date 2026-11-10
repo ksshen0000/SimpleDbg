@@ -59,6 +59,66 @@ uint64_t parse_number(const std::string& value, int base) {
     if (consumed != value.size()) throw std::runtime_error("invalid number: " + value);
     return number;
 }
+const std::map<std::string, std::string>& command_aliases() {
+    static const std::map<std::string, std::string> aliases = {
+        {"b", "break"}, {"c", "cont"}, {"continue", "cont"}, {"s", "step"},
+        {"n", "next"}, {"ni", "next"}, {"f", "finish"}, {"i", "info"},
+        {"h", "help"}, {"del", "delete"}, {"q", "quit"},
+    };
+    return aliases;
+}
+std::string command_name(const std::string& word) {
+    auto found = command_aliases().find(word);
+    return found == command_aliases().end() ? word : found->second;
+}
+void print_help(const std::string& topic) {
+    if (topic.empty()) {
+        std::cout <<
+            "break <symbol|hex runtime address> | break file:line\n"
+            "cont, si, next/ni (instruction step-over), finish, bt (frame pointers)\n"
+            "where, list, step (source line; requires binutils and DWARF)\n"
+            "regs [register|fp], x <address|symbol|$register> [decimal byte count]\n"
+            "set $register = <unsigned integer>; set mem <address|symbol> <hexbytes>\n"
+            "watch <address|symbol> [1|2|4|8], unwatch <id>, catch syscall [all|off|number]\n"
+            "info breakpoints/watchpoints/proc/sharedlibrary; info proc mappings\n"
+            "delete/enable/disable <breakpoint id>, delete all, anchor, timetravel, quit\n"
+            "Symbol breakpoints require code; raw addresses require an instruction boundary.\n"
+            "Ctrl-C pauses a running target. Threads/fork/exec end the session safely.\n"
+            "Aliases: b=break, c=cont, s=step, n=next, f=finish, i=info, h=help, del=delete.\n"
+            "Type help <command> for per-command details.\n";
+        return;
+    }
+    static const std::map<std::string, std::string> topics = {
+        {"break", "break <symbol|hex runtime address> | break <file>:<line>\n"
+                  "Set a software breakpoint. Symbols must resolve to code; raw addresses must point at an instruction boundary.\n"},
+        {"cont", "cont (alias c)\nContinue until a breakpoint, watchpoint, captured syscall, signal or exit.\n"},
+        {"si", "si\nSingle-step one instruction.\n"},
+        {"next", "next / ni (alias n)\nStep over a call by running to the return address.\n"},
+        {"finish", "finish (alias f)\nRun until the current function returns; requires a recognizable frame.\n"},
+        {"bt", "bt\nPrint up to 64 frame-pointer backtrace frames with ELF symbols.\n"},
+        {"where", "where\nShow the source location of the current instruction (requires DWARF).\n"},
+        {"list", "list\nShow the source around the current instruction (requires DWARF).\n"},
+        {"step", "step (alias s)\nStep one source line, executing at most 256 instructions.\n"},
+        {"regs", "regs [register|fp]\nShow general registers, or FP/SIMD state for fp/xmm/ymm/st/mxcsr.\n"},
+        {"x", "x <address|symbol|$register> [decimal byte count]\nExamine 1..4096 bytes, default 16.\n"},
+        {"set", "set $register = <unsigned integer>\nset mem <address|symbol> <hexbytes>\n"
+                "Registers are decimal or 0x-hex; memory writes use raw hexadecimal bytes without 0x.\n"},
+        {"watch", "watch <address|symbol> [1|2|4|8]\nSet a hardware write watchpoint (four slots, aligned address).\n"},
+        {"unwatch", "unwatch <watchpoint id>\nRemove a hardware watchpoint.\n"},
+        {"catch", "catch syscall [all|off|decimal number]\nCapture syscall entries and exits (Linux 5.3+).\n"},
+        {"info", "info breakpoints | watchpoints | proc [mappings] | sharedlibrary\nShow debugger and target state.\n"},
+        {"delete", "delete <id> | delete all (alias del)\nRemove software breakpoints and restore their original bytes.\n"},
+        {"enable", "enable <id>\nRevalidate permissions and re-arm a disabled breakpoint.\n"},
+        {"disable", "disable <id>\nRestore the original byte but keep the breakpoint metadata.\n"},
+        {"anchor", "anchor\nCapture a snapshot of private writable memory, registers and FP/XSAVE state.\n"},
+        {"timetravel", "timetravel\nRestore the most recent anchor; mappings must be unchanged.\n"},
+        {"help", "help [command]\nShow general help or details for one command.\n"},
+        {"quit", "quit / q\nExit and clean up the traced process.\n"},
+    };
+    auto found = topics.find(command_name(topic));
+    if (found == topics.end()) throw std::runtime_error("no help for '" + topic + "'; type help");
+    std::cout << found->second;
+}
 } // namespace
 
 long Debugger::trace(enum __ptrace_request request, Address address, void* data) {
@@ -424,8 +484,12 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
         while (input >> token) args.push_back(token);
         if (args.empty()) continue;
         try {
-            const auto& command = args[0];
-            if (command == "break") {
+            const std::string command = command_name(args[0]);
+            args[0] = command; // keep full-argument matchers (info, set, ...) canonical
+            if (command == "help") {
+                if (args.size() > 2) throw std::runtime_error("usage: help [command]");
+                print_help(args.size() == 2 ? args[1] : "");
+            } else if (command == "break") {
                 if (args.size() != 2) throw std::runtime_error("usage: break <symbol or hex runtime address>");
                 add_breakpoint(resolve_address(args[1], true));
             } else if (command == "set") {
@@ -443,10 +507,14 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                 if (!count || count > 4096) throw std::runtime_error("byte count must be 1..4096");
                 examine_memory(resolve_address(args[1]), count);
             } else if (command == "delete" || command == "enable" || command == "disable") {
-                if (args.size() != 2) throw std::runtime_error("usage: " + command + " <breakpoint id>");
-                uint64_t id = parse_number(args[1], 10);
-                if (!id || id > std::numeric_limits<unsigned>::max()) throw std::runtime_error("invalid breakpoint id");
-                manage_breakpoint(command, static_cast<unsigned>(id));
+                if (command == "delete" && args.size() == 2 && args[1] == "all") {
+                    delete_all_breakpoints();
+                } else {
+                    if (args.size() != 2) throw std::runtime_error("usage: " + command + " <breakpoint id>");
+                    uint64_t id = parse_number(args[1], 10);
+                    if (!id || id > std::numeric_limits<unsigned>::max()) throw std::runtime_error("invalid breakpoint id");
+                    manage_breakpoint(command, static_cast<unsigned>(id));
+                }
             } else if (command == "info") {
                 process_info(args);
             } else {
@@ -463,19 +531,7 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                     continue_execution();
                 } else if (command == "anchor") anchor();
                 else if (command == "timetravel") timetravel();
-                else if (command == "help") {
-                    std::cout <<
-                        "break <symbol|hex runtime address> | break file:line\n"
-                        "cont, si, next/ni (instruction step-over), finish, bt (frame pointers)\n"
-                        "where, list, step (source line; requires binutils and DWARF)\n"
-                        "regs [register|fp], x <address|symbol|$register> [decimal byte count]\n"
-                        "set $register = <unsigned integer>; set mem <address|symbol> <hexbytes>\n"
-                        "watch <address|symbol> [1|2|4|8], unwatch <id>, catch syscall [all|off|number]\n"
-                        "info breakpoints/watchpoints/proc/sharedlibrary; info proc mappings\n"
-                        "delete/enable/disable <breakpoint id>, anchor, timetravel, quit\n"
-                        "Symbol breakpoints require code; raw addresses require an instruction boundary.\n"
-                        "Ctrl-C pauses a running target. Threads/fork/exec end the session safely.\n";
-                } else throw std::runtime_error("unknown command; type help");
+                else throw std::runtime_error("unknown command; type help");
             }
             if (alive_) disassemble();
         } catch (const std::exception& error) {
@@ -489,6 +545,18 @@ bool Debugger::enabled_breakpoint(Address address) const {
     return bp != breakpoints_.end() && bp->second.enabled;
 }
 
+std::string Debugger::symbol_name(Address address) const {
+    try {
+        for (const auto& object : loaded_objects(child_)) {
+            if (address < object.bias) continue;
+            auto description = object.symbols->describe(address - object.bias);
+            if (description != "??") return description;
+        }
+    } catch (const std::exception&) {
+    }
+    return {};
+}
+
 void Debugger::list_breakpoints() const {
     std::cout << "ID  State     Address\n";
     if (breakpoints_.empty()) std::cout << "** no breakpoints.\n";
@@ -497,8 +565,26 @@ void Debugger::list_breakpoints() const {
     for (const auto& [address, bp] : sorted) {
         if (bp.internal) continue;
         std::cout << bp.id << "  " << (bp.enabled ? "enabled " : "disabled")
-                  << "  0x" << std::hex << address << std::dec << '\n';
+                  << "  0x" << std::hex << address;
+        auto name = symbol_name(address);
+        if (!name.empty()) std::cout << "  " << name;
+        std::cout << std::dec << '\n';
     }
+}
+
+void Debugger::delete_all_breakpoints() {
+    unsigned removed = 0, unarmed = 0;
+    for (auto it = breakpoints_.begin(); it != breakpoints_.end();) {
+        auto current = it++;
+        if (current->second.enabled) {
+            try { write_byte(current->first, current->second.original); }
+            catch (const std::exception&) { ++unarmed; }
+        }
+        breakpoints_.erase(current);
+        ++removed;
+    }
+    std::cout << "** deleted " << removed << (removed == 1 ? " breakpoint" : " breakpoints") << ".\n";
+    if (unarmed) std::cout << "** warning: " << unarmed << " breakpoint(s) could not be restored.\n";
 }
 
 void Debugger::manage_breakpoint(const std::string& command, unsigned id) {
