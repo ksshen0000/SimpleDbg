@@ -290,6 +290,20 @@ second:
                     self.assertIn(f"hit a breakpoint at 0x{address:x}", s.command("cont"))
                 self.assertIn("exited with status 3", s.command("cont"))
 
+    def test_star_address_syntax(self):
+        s = self.session()
+        address = self.address(s, "pie", "tick")
+        self.assertIn("set a breakpoint", s.command(f"break *0x{address:x}"))
+        for _ in range(3):
+            self.assertIn("hit a breakpoint", s.command("cont"))
+        self.assertIn("exited with status 3", s.command("cont"))
+
+    def test_help_flag(self):
+        result = subprocess.run([SDB, "--help"], capture_output=True, text=True, timeout=5)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("Usage:", result.stdout)
+        self.assertIn("--inherit-stdin", result.stdout)
+
     def test_single_step_at_breakpoint(self):
         s = self.session()
         address = self.address(s, "pie", "tick")

@@ -19,20 +19,30 @@ std::pair<std::string, Address> Debugger::source_object() {
     return {best->path, rip - best->bias};
 }
 
-void Debugger::show_source(bool listing) {
+void Debugger::show_source(bool listing, unsigned requested_line) {
     auto object = source_object();
     auto location = source_location(object.first, object.second);
     std::cout << location << '\n';
     if (!listing) return;
     auto colon = location.find_last_of(':');
     if (colon == std::string::npos) throw std::runtime_error("invalid source location");
-    unsigned line = std::stoul(location.substr(colon + 1));
-    std::ifstream file(location.substr(0, colon));
-    if (!file) throw std::runtime_error("source file unavailable: " + location.substr(0, colon));
-    std::string text;
-    for (unsigned i = 1; i <= line + 3 && std::getline(file, text); ++i) {
-        if (i + 3 >= line) std::cout << (i == line ? "> " : "  ") << i << "  " << text << '\n';
+    unsigned line = requested_line;
+    if (!line) {
+        try { line = static_cast<unsigned>(std::stoul(location.substr(colon + 1))); }
+        catch (const std::exception&) { throw std::runtime_error("invalid source location"); }
     }
+    const std::string path = location.substr(0, colon);
+    std::ifstream file(path);
+    if (!file) throw std::runtime_error("source file unavailable: " + path);
+    std::string text;
+    bool printed = false;
+    for (unsigned i = 1; i <= line + 3 && std::getline(file, text); ++i) {
+        if (i + 3 >= line) {
+            std::cout << (i == line ? "> " : "  ") << i << "  " << text << '\n';
+            printed = true;
+        }
+    }
+    if (!printed) std::cout << "** source line " << line << " is not present in " << path << ".\n";
 }
 
 Address Debugger::resolve_source(const std::string& request) {

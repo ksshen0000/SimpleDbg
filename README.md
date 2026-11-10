@@ -17,7 +17,7 @@ ctest --test-dir build --output-on-failure
 静态测试目标还需要静态 C 库（Debian/Ubuntu 通常由 `libc6-dev` 提供，Fedora/RHEL 为
 `glibc-static`）。缺少时 `static`/`static-pie` 用例会跳过并打印原因，其余测试照常运行。
 测试需要允许父进程跟踪自己的子进程。容器可能需要相应的 ptrace/seccomp 配置。
-三个测试组（47/22/7 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
+三个测试组（49/22/7 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
 错误注入只链接到测试程序 `sdb-fault`，生产程序 `sdb` 不包含注入入口。
 
 仅构建 Release 程序，不构建测试工具：
@@ -37,6 +37,7 @@ g++ -std=c++17 -Wall -Wextra -Wpedantic main.cpp sdb.cpp symbols.cpp process_map
 
 ```sh
 ./build/sdb ./your-program argument1 argument2
+./build/sdb --help
 ```
 
 动态程序经过链接器后停在主程序 ELF 入口（通常是 `_start`，并非 `main`），显示目标
@@ -46,14 +47,14 @@ PID、入口地址和加载偏移。反汇编直接读取运行内存，不要�
 | 命令 | 功能 |
 | --- | --- |
 | `break main` / `break libc:puts` | 函数符号断点；共享库支持库名消歧 |
-| `break 0x地址` / `break $rip` | 运行时地址断点，调用者必须确认指令边界 |
+| `break 0x地址` / `break *0x地址` / `break $rip` | 运行时地址断点（`*` 为 GDB 风格），调用者必须确认指令边界 |
 | `break 文件名:行号` | DWARF 源码行断点，要求 `-g` 和 binutils |
 | `cont` | 继续，遇到断点、监视点、捕获的 syscall、信号或退出时停止 |
 | `si` | 单步一条指令 |
 | `next` / `ni` | 指令级步过；当前是 call 时运行到返回位置 |
 | `finish` | 运行到当前函数返回；依赖可识别的栈帧 |
 | `bt` | 帧指针调用栈，最多 64 层，显示地址、ELF 符号与可用的源码位置 |
-| `where` / `list` | 当前源码位置 / 附近源码 |
+| `where` / `list [行号]` | 当前源码位置 / 附近源码（可指定行号） |
 | `step` | 源码行步进，最多执行 256 条指令 |
 | `regs [寄存器名或fp]` | 通用寄存器或 FP/SIMD 原始值 |
 | `x 地址/符号/$寄存器 [字节数]` | 十六进制查看内存，默认 16 字节，范围 1–4096 |

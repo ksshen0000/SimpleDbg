@@ -137,6 +137,8 @@ int main(void) {
         self.assertIn("hit a breakpoint", s.command("cont"))
         self.assertIn("features.c:8", s.command("where"))
         self.assertIn("> 8", s.command("list"))
+        self.assertIn("> 12", s.command("list 12"))
+        self.assertIn("not present", s.command("list 9999"))
         stepped = s.command("step")
         self.assertIn("features.c:", stepped)
         self.assertNotIn("error:", stepped)

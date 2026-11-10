@@ -549,6 +549,15 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                     if (!id || id > std::numeric_limits<unsigned>::max()) throw std::runtime_error("invalid breakpoint id");
                     manage_breakpoint(command, static_cast<unsigned>(id));
                 }
+            } else if (command == "list") {
+                if (args.size() > 2) throw std::runtime_error("usage: list [line]");
+                unsigned line = 0;
+                if (args.size() == 2) {
+                    uint64_t requested = parse_number(args[1], 10);
+                    if (!requested || requested > UINT32_MAX) throw std::runtime_error("invalid source line");
+                    line = static_cast<unsigned>(requested);
+                }
+                show_source(true, line);
             } else if (command == "info") {
                 process_info(args);
             } else {
@@ -559,7 +568,6 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                 else if (command == "finish") finish_frame();
                 else if (command == "bt") backtrace();
                 else if (command == "where") show_source(false);
-                else if (command == "list") show_source(true);
                 else if (command == "step") source_step();
                 else if (command == "cont") {
                     continue_execution();
@@ -673,31 +681,34 @@ std::map<std::string, Address> register_values(const user_regs_struct& r) {
 }
 
 Address Debugger::resolve_address(const std::string& value, bool code) {
-    if (!value.empty() && value[0] == '$') {
+    // GDB-style `*address` is accepted so `break *0x...` works as expected.
+    const std::string request = (!value.empty() && value[0] == '*') ? value.substr(1) : value;
+    if (request.empty()) throw std::runtime_error("missing address after '*'");
+    if (request[0] == '$') {
         auto values = register_values(registers());
-        auto found = values.find(value.substr(1));
+        auto found = values.find(request.substr(1));
         if (found == values.end()) throw std::runtime_error("unknown register: " + value);
         if (code) validate_address_breakpoint(found->second);
         return found->second;
     }
-    auto colon = value.find_last_of(':');
-    if (code && colon != std::string::npos && colon + 1 < value.size() &&
-        value.find_first_not_of("0123456789", colon + 1) == std::string::npos)
-        return resolve_source(value);
-    if (symbols_.contains(value) || value.find(':') != std::string::npos)
-        return resolve_symbol(value, code);
-    if (!value.empty() && value.find_first_not_of("abcdefABCDEF0123456789") == std::string::npos) {
+    auto colon = request.find_last_of(':');
+    if (code && colon != std::string::npos && colon + 1 < request.size() &&
+        request.find_first_not_of("0123456789", colon + 1) == std::string::npos)
+        return resolve_source(request);
+    if (symbols_.contains(request) || request.find(':') != std::string::npos)
+        return resolve_symbol(request, code);
+    if (request.find_first_not_of("abcdefABCDEF0123456789") == std::string::npos) {
         for (const auto& object : loaded_objects(child_)) {
-            if (object.symbols->contains(value)) return resolve_symbol(value, code);
+            if (object.symbols->contains(request)) return resolve_symbol(request, code);
         }
     }
-    bool hex = !value.empty() && value.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
-    if (hex || value.rfind("0x", 0) == 0 || value.rfind("0X", 0) == 0) {
-        auto address = parse_number(value, 16);
+    bool hex = request.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
+    if (hex || request.rfind("0x", 0) == 0 || request.rfind("0X", 0) == 0) {
+        auto address = parse_number(request, 16);
         if (code) validate_address_breakpoint(address);
         return address;
     }
-    return resolve_symbol(value, code);
+    return resolve_symbol(request, code);
 }
 
 void Debugger::show_registers(const std::string& name) {

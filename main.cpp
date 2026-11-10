@@ -10,6 +10,12 @@ int main(int argc, char** argv) {
     // Helper tools and the debugger itself may write to a pipe that the other
     // end closed (Ctrl-C, pager exit); report EPIPE instead of dying.
     std::signal(SIGPIPE, SIG_IGN);
+    if (argc > 1 && (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0)) {
+        std::cout << "Usage: " << argv[0] << " [--inherit-stdin] PROGRAM [ARGS...]\n"
+                  << "\nLinux x86-64 ptrace debugger. Enter `help` in the session for commands.\n"
+                  << "  --inherit-stdin  share this debugger's stdin with the target\n";
+        return 0;
+    }
     bool inherit_stdin = argc > 1 && std::string(argv[1]) == "--inherit-stdin";
     int program = inherit_stdin ? 2 : 1;
     if (argc <= program) { std::cerr << "Usage: " << argv[0] << " [--inherit-stdin] PROGRAM [ARGS...]\n"; return 1; }

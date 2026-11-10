@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；76 项测试
-  （集成 47、工作流 22、故障注入 7）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；78 项测试
+  （集成 49、工作流 22、故障注入 7）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -109,3 +109,10 @@ python3 tests/bench.py --sdb build-release/sdb
 - 增加 `.debug_line` 可用性缓存（按文件身份失效），无调试信息的对象（如 libc）不会
   再为逐帧回溯启动 `addr2line`；`bt` 在本机从 6.8 ms 降到 3.4 ms。
 - 回归：递归回溯断言帧内包含 `features.c:`。测试总数保持 76。
+
+### 批次 4：源码列表与命令行入口
+
+- `list [行号]` 可查看当前文件中的指定行；请求超出文件范围时给出提示而不是静默输出。
+- `sdb --help` / `-h` 输出用法并以 0 退出；`break *0x地址` 支持 GDB 风格前缀。
+- 新增集成测试覆盖 `*` 地址语法与 `--help`，源码流程增加指定行与越界断言；
+  测试总数 78。

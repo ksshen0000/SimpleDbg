@@ -103,7 +103,7 @@ private:
     void run_until(Address address, Address minimum_stack);
     void next_instruction();
     std::pair<std::string, Address> source_object();
-    void show_source(bool listing);
+    void show_source(bool listing, unsigned requested_line = 0);
     Address resolve_source(const std::string& request);
     void source_step();
     void finish_frame();
