@@ -825,7 +825,7 @@ second:
         s.command("break blocked_syscall")
         s.command("cont")
         s.command("catch syscall 0")
-        self.assertIn("syscall entry 0", s.command("cont"))
+        self.assertIn("syscall entry 0 (read)", s.command("cont"))
 
     def test_snapshot_rejects_pending_signal_without_consuming_it(self):
         s = self.session("pie", "signal")

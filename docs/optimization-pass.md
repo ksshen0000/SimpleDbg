@@ -138,3 +138,10 @@ python3 tests/bench.py --sdb build-release/sdb
   （只写）。x86 没有只读数据监视点，因此读访问配置在写时也会命中。
 - 监视点记录模式，命中消息与 `info watchpoints` 显示 `(write)`/`(read)`。
 - 新增回归：读监视点在读取时命中、写监视点忽略后续读取；测试总数 82。
+
+### 批次 8：syscall 名称与断点源码标注
+
+- `catch syscall` 的入口/出口信息附带常见 x86-64 syscall 名称（如 `entry 39 (getpid)`），
+  保留原有数字与返回值文本，兼容现有脚本。
+- `info breakpoints` 在符号描述后追加可用源码位置（`at 文件:行`）。
+- 扩展回归断言；测试总数保持 82。

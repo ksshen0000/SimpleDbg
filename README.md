@@ -78,7 +78,7 @@ PID、入口地址和加载偏移。反汇编直接读取运行内存，不要�
 `$rsp+16`、`0x1000-8`），也接受 GDB 风格的 `*0x地址`；溢出/下溢会直接报错。
 命令参数目前按空白切分；包含空格的源码路径可先使用不含空格且无歧义的文件名。
 常用别名：`b`=break、`c`=cont、`s`=step、`n`=next、`f`=finish、`i`=info、`h`=help、`del`=delete；
-`help <命令>` 查看单条命令用法，`info breakpoints` 在可解析时附带 ELF 符号描述。
+`help <命令>` 查看单条命令用法，`info breakpoints` 在可解析时附带 ELF 符号和源码位置。
 
 ## 常用调试流程
 
@@ -158,7 +158,7 @@ cont
 目前不提供只读/读写监视点或条件表达式。
 
 `catch syscall 39` 可观察 getpid，`catch syscall 1` 观察 write；输出入口的六个原始
-参数和出口的有符号返回值。`catch syscall off` 关闭捕获，模式保留到主动关闭。
+参数和出口的有符号返回值，并附常见 x86-64 syscall 名称（如 `getpid`）。`catch syscall off` 关闭捕获，模式保留到主动关闭。
 程序退出类 syscall 没有返回，所以只会看到入口及目标退出。
 入口/出口识别要求 Linux 5.3+ 的 GET_SYSCALL_INFO；请求失败时明确关闭捕获，
 保留继续执行能力，不把调试器合成的 SIGTRAP 标记转交给目标。

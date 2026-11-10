@@ -1,5 +1,6 @@
 #include "sdb.h"
 #include "process_maps.h"
+#include "source_tools.h"
 #include <fcntl.h>
 #include <sys/uio.h>
 #include <cpuid.h>
@@ -82,6 +83,96 @@ const char* signal_name(int number) {
         case SIGTTIN: return "SIGTTIN";
         case SIGTTOU: return "SIGTTOU";
         case SIGSYS: return "SIGSYS";
+        default: return nullptr;
+    }
+}
+const char* syscall_name(Address number) {
+    switch (number) {
+        case 0: return "read";
+        case 1: return "write";
+        case 2: return "open";
+        case 3: return "close";
+        case 4: return "stat";
+        case 5: return "fstat";
+        case 6: return "lstat";
+        case 7: return "poll";
+        case 8: return "lseek";
+        case 9: return "mmap";
+        case 10: return "mprotect";
+        case 11: return "munmap";
+        case 12: return "brk";
+        case 13: return "rt_sigaction";
+        case 14: return "rt_sigprocmask";
+        case 15: return "rt_sigreturn";
+        case 16: return "ioctl";
+        case 17: return "pread64";
+        case 18: return "pwrite64";
+        case 19: return "readv";
+        case 20: return "writev";
+        case 21: return "access";
+        case 22: return "pipe";
+        case 23: return "select";
+        case 24: return "sched_yield";
+        case 25: return "mremap";
+        case 32: return "dup";
+        case 33: return "dup2";
+        case 35: return "nanosleep";
+        case 39: return "getpid";
+        case 41: return "socket";
+        case 42: return "connect";
+        case 43: return "accept";
+        case 44: return "sendto";
+        case 45: return "recvfrom";
+        case 49: return "bind";
+        case 50: return "listen";
+        case 53: return "socketpair";
+        case 56: return "clone";
+        case 57: return "fork";
+        case 58: return "vfork";
+        case 59: return "execve";
+        case 60: return "exit";
+        case 61: return "wait4";
+        case 62: return "kill";
+        case 63: return "uname";
+        case 72: return "fcntl";
+        case 73: return "flock";
+        case 74: return "fsync";
+        case 78: return "getdents";
+        case 79: return "getcwd";
+        case 80: return "chdir";
+        case 82: return "rename";
+        case 83: return "mkdir";
+        case 87: return "unlink";
+        case 89: return "readlink";
+        case 90: return "chmod";
+        case 92: return "chown";
+        case 96: return "gettimeofday";
+        case 97: return "getrlimit";
+        case 99: return "sysinfo";
+        case 102: return "getuid";
+        case 104: return "getgid";
+        case 107: return "geteuid";
+        case 108: return "getegid";
+        case 110: return "getppid";
+        case 157: return "prctl";
+        case 186: return "gettid";
+        case 202: return "futex";
+        case 217: return "getdents64";
+        case 218: return "set_tid_address";
+        case 231: return "exit_group";
+        case 257: return "openat";
+        case 258: return "mkdirat";
+        case 262: return "newfstatat";
+        case 263: return "unlinkat";
+        case 267: return "readlinkat";
+        case 273: return "set_robust_list";
+        case 288: return "accept4";
+        case 293: return "pipe2";
+        case 316: return "renameat2";
+        case 318: return "getrandom";
+        case 334: return "rseq";
+        case 435: return "clone3";
+        case 439: return "faccessat2";
         default: return nullptr;
     }
 }
@@ -286,7 +377,9 @@ bool Debugger::wait_stop(bool stepping) {
         if (info.op == PTRACE_SYSCALL_INFO_ENTRY) {
             syscall_number_ = info.entry.nr;
             if (syscall_filter_ < 0 || syscall_number_ == static_cast<Address>(syscall_filter_)) {
-                std::cout << "** syscall entry " << syscall_number_ << " args:";
+                std::cout << "** syscall entry " << syscall_number_;
+                if (const char* name = syscall_name(syscall_number_)) std::cout << " (" << name << ")";
+                std::cout << " args:";
                 for (auto argument : info.entry.args) std::cout << " 0x" << std::hex << argument;
                 std::cout << std::dec << '\n';
                 return true;
@@ -294,7 +387,9 @@ bool Debugger::wait_stop(bool stepping) {
         } else if (info.op == PTRACE_SYSCALL_INFO_EXIT) {
             syscall_number_ = registers().orig_rax;
             if (syscall_filter_ < 0 || syscall_number_ == static_cast<Address>(syscall_filter_)) {
-                std::cout << "** syscall exit " << syscall_number_ << " result: " << info.exit.rval << '\n';
+                std::cout << "** syscall exit " << syscall_number_ << " result: " << info.exit.rval;
+                if (const char* name = syscall_name(syscall_number_)) std::cout << " (" << name << ")";
+                std::cout << '\n';
                 return true;
             }
         }
@@ -613,6 +708,18 @@ std::string Debugger::symbol_name(Address address) const {
     return {};
 }
 
+std::string Debugger::source_name(Address address) const {
+    try {
+        for (const auto& object : loaded_objects(child_)) {
+            if (address < object.bias) continue;
+            try { return source_location(object.path, address - object.bias); }
+            catch (const std::exception&) { continue; }
+        }
+    } catch (const std::exception&) {
+    }
+    return {};
+}
+
 bool Debugger::mapped(Address address) const {
     for (const auto& map : process_maps(child_)) {
         if (address >= map.start && address < map.end) return true;
@@ -631,6 +738,8 @@ void Debugger::list_breakpoints() const {
                   << "  0x" << std::hex << address;
         auto name = symbol_name(address);
         if (!name.empty()) std::cout << "  " << name;
+        auto source = source_name(address);
+        if (!source.empty()) std::cout << "  at " << source;
         std::cout << std::dec << '\n';
     }
 }
