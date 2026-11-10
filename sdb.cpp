@@ -758,6 +758,7 @@ void Debugger::list_breakpoints() const {
         if (bp.internal) continue;
         std::cout << bp.id << "  " << (bp.enabled ? "enabled " : "disabled")
                   << "  0x" << std::hex << address;
+        if (!mapped(address)) std::cout << "  (unmapped)";
         auto name = symbol_name(address);
         if (!name.empty()) std::cout << "  " << name;
         auto source = source_name(address);
@@ -935,17 +936,27 @@ void Debugger::show_registers(const std::string& name) {
         return;
     }
     auto values = register_values(registers());
-    auto print = [](const std::string& key, Address value) {
-        std::cout << key << " = 0x" << std::hex << std::setw(16) << std::setfill('0')
-                  << value << std::setfill(' ') << std::dec << '\n';
+    auto format = [](const std::string& key, Address value) {
+        std::ostringstream text;
+        text << key << " = 0x" << std::hex << std::setw(16) << std::setfill('0') << value;
+        return text.str();
     };
     if (!name.empty()) {
         std::string key = name[0] == '$' ? name.substr(1) : name;
         auto found = values.find(key);
         if (found == values.end()) throw std::runtime_error("unknown register: " + name);
-        print(found->first, found->second);
+        std::cout << format(found->first, found->second);
+        if (found->first == "rip") {
+            // Extra context only for an explicit `regs rip`; the full register
+            // dump stays a cheap single ptrace call.
+            auto symbol = symbol_name(found->second);
+            if (!symbol.empty()) std::cout << "  " << symbol;
+            auto source = source_name(found->second);
+            if (!source.empty()) std::cout << "  at " << source;
+        }
+        std::cout << '\n';
     } else {
-        for (const auto& [key, value] : values) print(key, value);
+        for (const auto& [key, value] : values) std::cout << format(key, value) << '\n';
     }
 }
 

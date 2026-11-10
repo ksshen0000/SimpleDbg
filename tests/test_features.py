@@ -110,6 +110,7 @@ int main(int argc, char **argv) {
         address = int.from_bytes(bytes(int(value, 16) for value in data[:8]), "little")
         self.assertIn("set a breakpoint", s.command(f"break 0x{address:x}"))
         self.assertIn("hit a breakpoint", s.command("cont"))
+        self.assertIn("(unmapped)", s.command("info breakpoints"))
         output = s.command("delete 2")
         self.assertIn("breakpoint 2: delete", output)
         self.assertIn("no longer mapped", output)

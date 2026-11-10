@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；87 项测试
-  （集成 53、工作流 26、故障注入 8）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；88 项测试
+  （集成 54、工作流 26、故障注入 8）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -184,3 +184,10 @@ python3 tests/bench.py --sdb build-release/sdb
 - 新增 100 层递归目标与 `bt` 回归：验证最多输出 64 帧（含 `#63`、不含 `#64`）、
   recurse 帧数量受控，并能正常 `finish`/继续退出。
 - 测试总数 87。
+
+### 批次 15：寄存器位置与失效断点标注
+
+- `regs rip` 在地址值后附带可用的 `符号+偏移` 与 `at 文件:行`；完整的 `regs` 列表保持
+  单次 ptrace 读取的轻量输出。
+- `info breakpoints` 对地址已解除映射的断点标注 `(unmapped)`。
+- 新增回归：rip 注解与 unmmapped 标注；测试总数 88。

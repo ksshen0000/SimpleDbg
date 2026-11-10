@@ -309,6 +309,15 @@ second:
             self.assertIn("hit a breakpoint", s.command("cont"))
         self.assertIn("exited with status 3", s.command("cont"))
 
+    def test_regs_rip_annotation(self):
+        s = self.session()
+        address = self.address(s, "pie", "tick")
+        s.command(f"break {address:x}")
+        s.command("cont")
+        output = s.command("regs rip")
+        self.assertIn(f"rip = 0x{address:016x}", output)
+        self.assertIn("tick+0", output)
+
     def test_examine_string(self):
         s = self.session("bugs")
         output = s.command("x/s msg")
