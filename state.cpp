@@ -1,6 +1,7 @@
 #include "sdb.h"
 #include <sys/uio.h>
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -16,6 +17,13 @@ uint64_t number(const std::string& value, int base = 0) {
     return result;
 }
 constexpr size_t snapshot_limit = 128 * 1024 * 1024;
+// One bulk syscall per 64 KiB keeps the transaction granular enough to fall
+// back to ptrace when process_vm_writev is unavailable, without the ~1 us cost
+// of a PTRACE_POKEDATA per machine word.
+constexpr size_t snapshot_write_chunk = 64 * 1024;
+bool bulk_write_unavailable(int error) {
+    return error == ENOSYS || error == EPERM || error == EACCES;
+}
 }
 
 void Debugger::require_writable(Address address, size_t size) {
@@ -137,17 +145,46 @@ Debugger::Snapshot Debugger::capture_snapshot() {
 }
 
 void Debugger::apply_snapshot(const Snapshot& snapshot) {
+    auto write_words = [&](Address base, const uint8_t* data, size_t length) {
+        size_t offset = 0;
+        for (; offset + sizeof(long) <= length; offset += sizeof(long)) {
+            unsigned long word;
+            std::memcpy(&word, data + offset, sizeof(word));
+            trace(PTRACE_POKEDATA, base + offset, reinterpret_cast<void*>(word));
+        }
+        if (offset < length) {
+            // Preserve bytes outside the restored range in the final word.
+            Address current = base + offset;
+            Address aligned = current & ~(sizeof(long) - 1);
+            unsigned long word = static_cast<unsigned long>(trace(PTRACE_PEEKDATA, aligned));
+            std::memcpy(reinterpret_cast<uint8_t*>(&word) + (current - aligned), data + offset, length - offset);
+            trace(PTRACE_POKEDATA, aligned, reinterpret_cast<void*>(word));
+        }
+    };
+    std::vector<uint8_t> chunk;
     for (size_t i = 0; i < snapshot.maps.size(); ++i) {
         const auto& bytes = snapshot.memory[i];
         const auto& map = snapshot.maps[i];
-        for (size_t offset = 0; offset < bytes.size(); offset += 8) {
-            unsigned long word;
-            std::memcpy(&word, bytes.data() + offset, 8);
-            for (auto bp = breakpoints_.lower_bound(map.start + offset);
-                 bp != breakpoints_.end() && bp->first - (map.start + offset) < 8; ++bp) {
-                if (bp->second.enabled) reinterpret_cast<uint8_t*>(&word)[bp->first - (map.start + offset)] = 0xcc;
+        for (size_t offset = 0; offset < bytes.size(); offset += snapshot_write_chunk) {
+            const size_t length = std::min(snapshot_write_chunk, bytes.size() - offset);
+            const Address base = map.start + offset;
+            chunk.assign(bytes.begin() + offset, bytes.begin() + offset + length);
+            for (auto bp = breakpoints_.lower_bound(base);
+                 bp != breakpoints_.end() && bp->first - base < length; ++bp) {
+                if (bp->second.enabled) chunk[bp->first - base] = 0xcc;
             }
-            trace(PTRACE_POKEDATA, map.start + offset, reinterpret_cast<void*>(word));
+            iovec local{chunk.data(), length};
+            iovec remote{reinterpret_cast<void*>(base), length};
+            ssize_t count = process_vm_writev(child_, &local, 1, &remote, 1, 0);
+            if (count == static_cast<ssize_t>(length)) continue;
+            int error = count < 0 ? errno : 0;
+            if (count < 0 && !bulk_write_unavailable(error))
+                throw std::runtime_error(std::string("restore memory: ") + std::strerror(error));
+            // Partial or unsupported bulk write: redo the rest with ptrace.
+            // Rewriting the aligned prefix is safe; it carries the same bytes.
+            const size_t done = count > 0 ? static_cast<size_t>(count) : 0;
+            const size_t aligned = done & ~(sizeof(long) - 1);
+            write_words(base + aligned, chunk.data() + aligned, length - aligned);
         }
     }
     // A hit breakpoint is temporarily disarmed, including in read-only text.

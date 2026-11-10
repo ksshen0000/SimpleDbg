@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,20 @@ private:
         uint8_t original;
         bool enabled = true;
         bool internal = false;
+    };
+    // Re-arms a software breakpoint whose original byte was restored for a
+    // step. Its destructor runs on every exit path, including exceptions, so a
+    // failed step cannot silently leave the breakpoint unarmed.
+    class ReArm {
+    public:
+        ReArm(Debugger& debugger, Address address) : debugger_(debugger), address_(address) {}
+        ~ReArm();
+        ReArm(const ReArm&) = delete;
+        ReArm& operator=(const ReArm&) = delete;
+    private:
+        Debugger& debugger_;
+        Address address_;
+        bool pending_ = true;
     };
     std::map<Address, Breakpoint> breakpoints_;
     unsigned next_breakpoint_id_ = 1;

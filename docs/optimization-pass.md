@@ -1,0 +1,81 @@
+# 优化交付记录（2026-11-10）
+
+本记录对应 `ea6d09d` 之后的一轮本地优化，目标是修复阻断性问题、消除可测量的性能
+瓶颈，并补齐回归测试与文档。命令语义、单进程/单线程范围和对外行为边界不变。
+
+## 1. 交付内容
+
+| # | 问题 | 改动 | 主要文件 |
+| --- | --- | --- | --- |
+| 1 | 容器/btrfs 下 `/proc/<pid>/maps` 的 dev 与 `stat().st_dev` 不一致，所有符号功能被拒绝 | 文件身份只比较 inode；符号缓存仍按设备、inode、大小、时间校验 | [process_maps.cpp](../process_maps.cpp) |
+| 2 | 缺少静态 libc 时集成测试在 `setUpClass` 直接报错，整组不执行 | 静态目标改为可选；构建失败时跳过相关用例并打印原因 | [test_debugger.py](../tests/test_debugger.py) |
+| 3 | GCC 16 对链式 volatile 赋值产生 `-Wvolatile` | 拆成三条赋值 | [sdb.cpp](../sdb.cpp) |
+| 4 | 单步/继续抛异常时，被临时恢复的 `INT3` 不会装回 | `ReArm` RAII 守卫；装回失败时禁用该断点并告警 | [sdb.h](../sdb.h)、[sdb.cpp](../sdb.cpp) |
+| 5 | `timetravel` 每 8 字节一次 `PTRACE_POKEDATA` | 64 KiB 块 `process_vm_writev`；`ENOSYS/EPERM/EACCES` 或部分写入时回退 ptrace | [state.cpp](../state.cpp) |
+| 6 | 源码行断点每次 spawn `readelf`，`step` 每条指令 spawn `addr2line` | decodedline 行表按对象缓存；常驻 `addr2line` 按地址查询 | [source_tools.cpp](../source_tools.cpp) |
+| 7 | 每条命令重复读 `/proc/pid/maps`、ELF 头和 `stat` | 停止期间缓存映射与已加载对象，resume 前失效；可写映射/执行权限检查复用同一解析 | [process_maps.cpp](../process_maps.cpp)、[sdb.cpp](../sdb.cpp) |
+| 8 | 小段内存也逐机器字 `PTRACE_PEEKDATA` | 所有大小先试 `process_vm_readv`，失败回退 ptrace | [sdb.cpp](../sdb.cpp) |
+| 9 | 写已关闭管道可能被 SIGPIPE 终止；目标也可能误继承该处置 | 调试器忽略 SIGPIPE，目标 exec 前恢复 `SIG_DFL`；新增目标处置回归测试 | [main.cpp](../main.cpp)、[sdb.cpp](../sdb.cpp)、[test_features.py](../tests/test_features.py) |
+| 10 | 快照批量写缺少故障注入覆盖 | 测试链接新增 `--wrap=process_vm_writev`，支持 `vm`（EIO）和 `e`（ENOSYS 回退）模式 | [ptrace_fault.cpp](../tests/ptrace_fault.cpp)、[CMakeLists.txt](../CMakeLists.txt) |
+
+同时新增 [tests/bench.py](../tests/bench.py)：生成带 32 MiB 匿名堆的 `-g` 目标，打印
+各命令耗时，便于复现下面的数据（不加入 ctest，避免把机器相关的计时变成断言）。
+
+## 2. 性能数据
+
+环境：Linux x86-64、GCC 16.2.1、Release 构建；被测目标 `-g -O0 -fPIE -pie`，快照
+使用 32 MiB 匿名堆。优化前数据使用“仅放宽符号校验”的 `-O2` 版本，保证与优化后
+都处于符号可用状态。
+
+| 场景 | 优化前 | 优化后 | 说明 |
+| --- | --- | --- | --- |
+| `timetravel`（32 MiB 堆） | 3.75 s | ≈33 ms（重复测量 32–54 ms） | 约 110 倍；由约 419 万次 `PTRACE_POKEDATA` 变为约 512 次批量写 |
+| `step` 前进一行 | 10–58 ms | 0.1–2 ms | 每行不再 spawn 多个 `addr2line` |
+| `break <文件>:<行>`（重复） | 155–215 ms | 0.1 ms | 行表缓存；首次约 70 ms（符号解析 + `readelf` + 启动 `addr2line`） |
+| `info sharedlibrary` | 33 ms | 13–30 ms 首次 / 0.1 ms 重复 | 首次包含 libc 约 1.1 万符号解析 |
+| `bt` | 2.0 ms | 1.3–1.5 ms | 映射/对象缓存 |
+| `where` | 5.3 ms | 2–2.6 ms 首次 / 0.2 ms 重复 | 常驻 `addr2line` |
+| `regs` | 0.16 ms | 0.06 ms | 小段内存批量读 |
+| 5 次 `step` 的 `addr2line` 进程数 | 34 | 1 | 会话内复用常驻进程 |
+
+复现：
+
+```sh
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release -j2
+python3 tests/bench.py --sdb build-release/sdb
+```
+
+## 3. 行为与兼容性
+
+- **符号身份**：映射中的 dev 与 `stat(2)` 不同不再被拒绝；文件被替换仍可通过
+  inode（以及缓存的设备、大小、mtime/ctime）发现。已有的库替换回归测试保持通过。
+- **映射缓存**：仅在目标停止时有效；`cont`/`si`/内部 syscall 恢复前失效，因此
+  `dlopen`/`munmap`/`mprotect` 之后会重新读取。`info proc mappings` 与
+  `info sharedlibrary` 在同一个停止点重复执行不再产生文件 I/O。
+- **快照写回**：写入内容与失败语义不变；`process_vm_writev` 的 `ENOSYS`/`EPERM`/
+  `EACCES` 或部分写入会回退到逐机器字 ptrace 写，其他错误仍触发原有回滚/终止事务。
+- **源码工具**：每个对象最多一个常驻 `addr2line`（缓存上限 4 个），单次查询 5 秒超时，
+  超时/进程退出会重启一次；decodedline 行表按对象身份缓存（上限 8 个）。一次性工具
+  仍保持 15 秒、16 MiB 输出限制。
+- **测试**：静态目标（`static`、`static-pie`、`safety-static*`）在无法链接静态 libc
+  时跳过并打印原因；PIE/动态目标、故障注入目标仍强制构建。
+- **故障注入**：包装函数只链接到 `sdb-fault`，生产 `sdb` 不包含任何注入入口。
+
+## 4. 验证
+
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；74 项测试
+  （集成 46、工作流 21、故障注入 7）。
+- Release 构建：`ctest` 3/3 通过。
+- 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
+- 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
+- 本机无法运行 ASan/UBSan：系统只有 38 字节的 `libasan.so` linker script，目标
+  `/usr/lib64/libasan.so.8.0.0` 不存在，属于环境问题；CI 矩阵仍包含 ASan+UBSan。
+- 手工验证：32 MiB 快照恢复、源码行断点/`where`/`list`/`step`、符号断点与 `bt`。
+
+## 5. 未覆盖与后续
+
+- 快照仍是全量写回，未做 soft-dirty/脏页跟踪。
+- ELF 符号仍一次解析整张符号表（libc 约 1.1 万符号，Release 首次约 15 ms）。
+- 命令分发、帮助和别名仍是 if/else；readline 历史/补全未实现。
+- attach、core、remote 与完整多线程仍按 README 的边界未实现。

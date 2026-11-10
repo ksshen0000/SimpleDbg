@@ -14,8 +14,10 @@ cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
 
+静态测试目标还需要静态 C 库（Debian/Ubuntu 通常由 `libc6-dev` 提供，Fedora/RHEL 为
+`glibc-static`）。缺少时 `static`/`static-pie` 用例会跳过并打印原因，其余测试照常运行。
 测试需要允许父进程跟踪自己的子进程。容器可能需要相应的 ptrace/seccomp 配置。
-三个测试组覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
+三个测试组（46/21/7 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
 错误注入只链接到测试程序 `sdb-fault`，生产程序 `sdb` 不包含注入入口。
 
 仅构建 Release 程序，不构建测试工具：
@@ -95,15 +97,18 @@ cont
 无符号时 bt 仍可显示地址；finish 对无法确认已建立帧指针的函数体会拒绝，避免跳过调用者。
 
 源码工具使用 binutils 的 `addr2line`/`readelf` 解析 DWARF 行信息，以参数数组执行，
-不通过 shell。单次工具执行有 15 秒和 16 MiB 输出限制。缺失 DWARF、源码文件或
-工具时会提示错误。未实现局部变量、类型表达式、完整作用域或内联帧分析。
+不通过 shell。`addr2line` 在会话内常驻复用，decodedline 行表按对象缓存，因此 `step`
+不再为每条指令启动新进程；一次性工具仍限制 15 秒和 16 MiB 输出，常驻查询超时为 5 秒。
+缺失 DWARF、源码文件或工具时会提示错误。未实现局部变量、类型表达式、完整作用域或内联帧分析。
 源码行断点选择匹配行的第一个地址；跨 ELF 对象重名时要求绝对源码路径消歧。
 
 ## 符号和地址安全
 
 主程序和当前已加载的共享对象支持 `.symtab` / `.dynsym`，不依赖 DWARF。
-解析时刷新映射，支持 `dlopen`；缓存最多 64 个 ELF 文件的符号，按设备、inode、
-大小和修改/变更时间失效。文件已被替换且不再对应映射时不复用旧符号。
+映射和已加载对象在目标停止期间缓存，继续运行后自动刷新，因此 `dlopen`/`dlclose` 仍可感知。
+符号缓存最多 64 个 ELF 文件，按设备、inode、大小和修改/变更时间失效。文件身份以 inode
+为准：容器、btrfs 子卷或挂载命名空间下映射的 dev 可能与 `stat(2)` 不同，此时不拒绝路径。
+文件已被替换且不再对应映射时不复用旧符号。
 
 - `break libc:puts`：库名前缀或完整库名消歧，也可使用完整库路径。
 - `break libc:puts@GLIBC_2.2.5`：GNU 符号版本精确匹配。
@@ -154,7 +159,8 @@ cont
 
 恢复前拒绝映射新增/删除/权限/文件身份变化，包括只读 mmap、mprotect、dlopen。
 恢复过程先备份当前停止状态；内存或寄存器恢复失败时尝试回滚，回滚失败则终止目标。
-当前的软件断点及硬件监视点集合保留，软件断点会重新布置。
+内存批量写回优先使用 `process_vm_writev`，内核或安全模块不允许时回退到 ptrace 逐字写入，
+失败语义不变。当前的软件断点及硬件监视点集合保留，软件断点会重新布置。
 
 只允许在无待转交信号、无 syscall 捕获停止、无 Ctrl-C 暂停状态的用户态断点/单步点
 创建或备份快照。这避免把内核信号投递/在途 syscall 误当成可恢复的寄存器状态。
@@ -203,6 +209,18 @@ ctest --test-dir build-coverage --output-on-failure
 CI 配置包含普通/ASan+UBSan 矩阵、测试和回放日志归档；本地验证不代表远端 CI 已运行。
 覆盖率构建产生 `.gcda`，可用 `gcov`/`gcovr` 生成报告。旧问题证据保留在 `docs/validation`。
 
+## 性能测量
+
+`tests/bench.py` 会生成带可配置匿名堆的 `-g` 目标，打印各命令的本机耗时（只测量，
+不做断言）：
+
+```sh
+python3 tests/bench.py --sdb build-release/sdb
+python3 tests/bench.py --sdb build/sdb --heap-mib 32
+```
+
+本轮优化前后的对照数据、验证范围和兼容性说明见 [优化交付记录](docs/optimization-pass.md)。
+
 ## 代码结构与进度
 
 - `main.cpp`：入口与 ELF 校验。
@@ -213,4 +231,5 @@ CI 配置包含普通/ASan+UBSan 矩阵、测试和回放日志归档；本地�
 - `source_tools.*` / `source_commands.cpp`：binutils 进程隔离与源码行功能。
 - `tests/`：集成、工作流、故障注入和演示。
 
-需求状态、验证结果及后续工作见 [实现进度](docs/implementation-progress.md)。
+需求状态、验证结果及后续工作见 [实现进度](docs/implementation-progress.md)；
+本轮性能与交付性改动见 [优化交付记录](docs/optimization-pass.md)。

@@ -51,7 +51,8 @@ int main(void) { ready(); return counter; }
         s.command("anchor")
         s.command("set mem counter 06000000")
         s.command("set $r12 = 77")
-        control.write_text("poke 10 0")
+        # Fail the second bulk restore chunk, after the first one was written.
+        control.write_text("vm 2 0")
         self.assertIn("original stopped state was restored", s.command("timetravel"))
         self.assertIn(": 06 00 00 00", s.command("x counter 4"))
         self.assertIn("000000000000004d", s.command("regs r12"))
@@ -68,6 +69,17 @@ int main(void) { ready(); return counter; }
         self.assertEqual(before, s.command("regs xmm0"))
         self.assertIn("exited with status 6", s.command("cont"))
 
+    def test_snapshot_falls_back_when_bulk_write_is_unavailable(self):
+        s, control = self.session()
+        s.command("anchor")
+        s.command("set mem counter 06000000")
+        # Simulate a kernel/security module without process_vm_writev: the
+        # restore must still complete through PTRACE_POKEDATA.
+        control.write_text("e 1 0")
+        self.assertIn("go back to the anchor", s.command("timetravel"))
+        self.assertIn(": 00 00 00 00", s.command("x counter 4"))
+        self.assertIn("exited with status 0", s.command("cont"))
+
     def test_memory_rollback_failure_terminates_target(self):
         s, control = self.session()
         pid = int(re.search(r"PID: (\d+)", s.initial)[1])
@@ -80,7 +92,8 @@ int main(void) { ready(); return counter; }
         s, control = self.session()
         pid = int(re.search(r"PID: (\d+)", s.initial)[1])
         s.command("anchor")
-        control.write_text("poke 10 11")
+        # Fail the restore of the anchor and the rollback of that failed restore.
+        control.write_text("vm 2 3")
         self.assertIn("rollback failed; target terminated", s.command("timetravel"))
         s.process.wait(timeout=5)
         self.assertFalse(Path(f"/proc/{pid}").exists())

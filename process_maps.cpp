@@ -6,16 +6,19 @@
 #include <stdexcept>
 #include <set>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 
 namespace {
 std::shared_ptr<const ElfSymbols> cached_symbols(const ProcessMapping& mapping) {
     struct stat identity{};
     if (stat(mapping.path.c_str(), &identity) < 0) throw std::runtime_error("ELF file is unavailable");
-    auto colon = mapping.device.find(':');
-    if (colon == std::string::npos || std::stoull(mapping.inode) != identity.st_ino ||
-        std::stoul(mapping.device.substr(0, colon), nullptr, 16) != major(identity.st_dev) ||
-        std::stoul(mapping.device.substr(colon + 1), nullptr, 16) != minor(identity.st_dev))
+    // Device numbers in /proc/<pid>/maps can differ from stat(2) inside
+    // containers, btrfs subvolumes and mount namespaces even though the path
+    // still names the mapped file. The inode is stable across those views, so
+    // compare it (plus the cached size/timestamps) instead of the device.
+    uint64_t inode = 0;
+    try { inode = std::stoull(mapping.inode); }
+    catch (const std::exception&) { throw std::runtime_error("invalid inode in process mapping"); }
+    if (inode != identity.st_ino)
         throw std::runtime_error("ELF path no longer refers to the mapped file");
     struct Cached { struct stat identity; std::shared_ptr<const ElfSymbols> symbols; };
     static std::map<std::string, Cached> cache;
@@ -35,7 +38,21 @@ std::shared_ptr<const ElfSymbols> cached_symbols(const ProcessMapping& mapping) 
 }
 }
 
-std::vector<ProcessMapping> process_maps(pid_t pid) {
+namespace {
+// The target is stopped while commands run, so its mappings and loaded objects
+// cannot change between two queries. Cache them until the tracee is resumed.
+struct ProcessView {
+    pid_t pid = -1;
+    bool maps_valid = false;
+    bool objects_valid = false;
+    std::vector<ProcessMapping> maps;
+    std::vector<LoadedObject> objects;
+} view;
+
+void load_maps(pid_t pid) {
+    if (view.maps_valid && view.pid == pid) return;
+    view = ProcessView{};
+    view.pid = pid;
     std::ifstream file("/proc/" + std::to_string(pid) + "/maps");
     if (!file) throw std::runtime_error("process mappings are unavailable");
     std::vector<ProcessMapping> result;
@@ -48,19 +65,34 @@ std::vector<ProcessMapping> process_maps(pid_t pid) {
             throw std::runtime_error("invalid process mapping");
         auto dash = range.find('-');
         if (dash == std::string::npos) throw std::runtime_error("invalid mapping range");
-        map.start = std::stoull(range.substr(0, dash), nullptr, 16);
-        map.end = std::stoull(range.substr(dash + 1), nullptr, 16);
+        try {
+            map.start = std::stoull(range.substr(0, dash), nullptr, 16);
+            map.end = std::stoull(range.substr(dash + 1), nullptr, 16);
+        } catch (const std::exception&) {
+            throw std::runtime_error("invalid mapping range");
+        }
         std::getline(input >> std::ws, map.path);
         result.push_back(std::move(map));
     }
-    return result;
+    view.maps = std::move(result);
+    view.maps_valid = true;
+}
+}
+
+void invalidate_process_view() { view = ProcessView{}; }
+
+std::vector<ProcessMapping> process_maps(pid_t pid) {
+    load_maps(pid);
+    return view.maps;
 }
 
 std::vector<LoadedObject> loaded_objects(pid_t pid) {
+    load_maps(pid);
+    if (view.objects_valid) return view.objects;
     std::vector<LoadedObject> result;
     std::set<std::pair<std::string, uint64_t>> seen;
     const uint64_t page = static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
-    const auto mappings = process_maps(pid);
+    const auto& mappings = view.maps;
     for (const auto& map : mappings) {
         if (map.offset || map.path.empty() || map.path[0] != '/') continue;
         std::ifstream file(map.path, std::ios::binary);
@@ -70,11 +102,12 @@ std::vector<LoadedObject> loaded_objects(pid_t pid) {
             header.e_ident[2] != ELFMAG2 || header.e_ident[3] != ELFMAG3 ||
             header.e_ident[EI_CLASS] != ELFCLASS64 || header.e_machine != EM_X86_64 ||
             header.e_phentsize != sizeof(Elf64_Phdr)) continue;
-        for (unsigned i = 0; i < header.e_phnum; ++i) {
-            if (header.e_phoff > UINT64_MAX - uint64_t(i) * sizeof(Elf64_Phdr)) break;
-            file.seekg(header.e_phoff + uint64_t(i) * sizeof(Elf64_Phdr));
-            Elf64_Phdr segment{};
-            if (!file.read(reinterpret_cast<char*>(&segment), sizeof(segment))) break;
+        if (header.e_phoff > UINT64_MAX - uint64_t(header.e_phnum) * sizeof(Elf64_Phdr)) continue;
+        std::vector<Elf64_Phdr> segments(header.e_phnum);
+        file.seekg(header.e_phoff);
+        if (segments.size() &&
+            !file.read(reinterpret_cast<char*>(segments.data()), segments.size() * sizeof(Elf64_Phdr))) continue;
+        for (const auto& segment : segments) {
             if (segment.p_type != PT_LOAD || segment.p_offset != 0) continue;
             uint64_t base = segment.p_vaddr - segment.p_vaddr % page;
             if (map.start < base) break;
@@ -82,10 +115,7 @@ std::vector<LoadedObject> loaded_objects(pid_t pid) {
             // A RELRO/data segment can also map file offset zero. Verify that
             // this bias places executable LOAD segments in executable mappings.
             bool valid = true;
-            for (unsigned j = 0; j < header.e_phnum; ++j) {
-                file.seekg(header.e_phoff + uint64_t(j) * sizeof(Elf64_Phdr));
-                Elf64_Phdr code{};
-                if (!file.read(reinterpret_cast<char*>(&code), sizeof(code))) { valid = false; break; }
+            for (const auto& code : segments) {
                 if (code.p_type != PT_LOAD || !(code.p_flags & PF_X) || !code.p_memsz) continue;
                 if (code.p_vaddr > UINT64_MAX - bias) { valid = false; break; }
                 uint64_t address = bias + code.p_vaddr;
@@ -111,5 +141,7 @@ std::vector<LoadedObject> loaded_objects(pid_t pid) {
             break;
         }
     }
-    return result;
+    view.objects = std::move(result);
+    view.objects_valid = true;
+    return view.objects;
 }

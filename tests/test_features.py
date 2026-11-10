@@ -90,6 +90,32 @@ int main(int argc, char **argv) {
         bias = int(re.search(r"load bias 0x([0-9a-f]+)", s.initial)[1], 16)
         return offset + bias
 
+    def test_target_keeps_default_sigpipe_disposition(self):
+        source = self.root / "sigpipe.c"
+        target = self.root / "sigpipe"
+        source.write_text("""#include <signal.h>
+int main(void) {
+    struct sigaction action;
+    if (sigaction(SIGPIPE, 0, &action)) return 9;
+    return action.sa_handler == SIG_DFL ? 0 : 1;
+}
+""")
+        subprocess.run(["gcc", "-O0", str(source), "-o", str(target)], check=True)
+        s = Session(target)
+        self.addCleanup(s.close)
+        self.assertIn("exited with status 0", s.command("cont"))
+
+    def test_source_line_breakpoint_where_list_and_step(self):
+        s = self.session()
+        self.assertIn("set a breakpoint", s.command(f"break {self.source}:8"))
+        self.assertIn("hit a breakpoint", s.command("cont"))
+        self.assertIn("features.c:8", s.command("where"))
+        self.assertIn("> 8", s.command("list"))
+        stepped = s.command("step")
+        self.assertIn("features.c:", stepped)
+        self.assertNotIn("error:", stepped)
+        self.assertIn("exited with status 1", s.command("cont"))
+
     def test_next_steps_over_call_without_consuming_user_ids(self):
         s = self.session()
         s.command("break call_leaf")

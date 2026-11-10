@@ -40,7 +40,12 @@ void on_interrupt(int) {
 }
 struct ExecutionScope {
     sig_atomic_t previous = target_running;
-    ExecutionScope() { target_running = 1; }
+    ExecutionScope() {
+        // The tracee may mmap/munmap/mprotect/dlopen while running; drop the
+        // stopped-process view before every resume.
+        invalidate_process_view();
+        target_running = 1;
+    }
     ~ExecutionScope() { target_running = previous; }
 };
 std::runtime_error system_error(const std::string& action) {
@@ -77,14 +82,27 @@ void Debugger::write_byte(Address address, uint8_t byte) {
     trace(PTRACE_POKEDATA, aligned, reinterpret_cast<void*>(word));
 }
 
+Debugger::ReArm::~ReArm() {
+    if (!pending_ || !debugger_.alive_) return;
+    try {
+        debugger_.write_byte(address_, 0xcc);
+    } catch (...) {
+        auto bp = debugger_.breakpoints_.find(address_);
+        if (bp != debugger_.breakpoints_.end()) bp->second.enabled = false;
+        std::cout << "** warning: could not re-arm the breakpoint at 0x"
+                  << std::hex << address_ << std::dec << "; it is now disabled.\n";
+    }
+}
+
 std::vector<uint8_t> Debugger::read_memory(Address address, size_t size, bool partial) {
     if (size && address > std::numeric_limits<Address>::max() - (size - 1))
         throw std::runtime_error("memory address range overflows");
     std::vector<uint8_t> bytes;
     bytes.reserve(size);
-    // Snapshot reads should not require one syscall per machine word. Fall
-    // back to ptrace for inaccessible pages/kernels that disallow bulk reads.
-    if (size >= 4096) {
+    // Reading one machine word at a time costs a syscall per 8 bytes. Use a
+    // bulk read for every size (disassembly and snapshot) and fall back to
+    // ptrace for inaccessible pages or kernels that disallow bulk reads.
+    if (size) {
         bytes.resize(size);
         iovec local{bytes.data(), size};
         iovec remote{reinterpret_cast<void*>(address), size};
@@ -109,18 +127,10 @@ std::vector<uint8_t> Debugger::read_memory(Address address, size_t size, bool pa
 }
 
 std::vector<Debugger::Mapping> Debugger::writable_maps() {
-    std::ifstream file("/proc/" + std::to_string(child_) + "/maps");
-    if (!file) throw std::runtime_error("cannot read process mappings");
     std::vector<Mapping> maps;
-    std::string line;
-    while (std::getline(file, line)) {
-        std::istringstream input(line);
-        std::string range, permissions;
-        input >> range >> permissions;
-        if (permissions.size() != 4 || permissions[1] != 'w' || permissions[3] != 'p') continue;
-        size_t dash = range.find('-');
-        maps.push_back({std::stoull(range.substr(0, dash), nullptr, 16),
-                        std::stoull(range.substr(dash + 1), nullptr, 16), permissions});
+    for (const auto& map : process_maps(child_)) {
+        if (map.permissions.size() != 4 || map.permissions[1] != 'w' || map.permissions[3] != 'p') continue;
+        maps.push_back({map.start, map.end, map.permissions});
     }
     return maps;
 }
@@ -193,6 +203,7 @@ bool Debugger::wait_stop(bool stepping) {
             }
         }
         target_running = 1;
+        invalidate_process_view();
         trace(PTRACE_SYSCALL);
         continue;
     }
@@ -238,14 +249,16 @@ bool Debugger::single_step() {
     Address rip = registers().rip;
     auto bp = breakpoints_.find(rip);
     bool step_over = bp != breakpoints_.end() && bp->second.enabled && !signal_;
-    if (step_over) write_byte(rip, bp->second.original);
+    std::optional<ReArm> rearm;
+    if (step_over) {
+        write_byte(rip, bp->second.original);
+        rearm.emplace(*this, rip);
+    }
     int delivered = signal_;
     signal_ = 0;
     target_running = 1;
     trace(PTRACE_SINGLESTEP, 0, reinterpret_cast<void*>(static_cast<intptr_t>(delivered)));
-    bool stopped = wait_stop(true);
-    if (stopped && step_over) write_byte(rip, 0xcc);
-    return stopped;
+    return wait_stop(true);
 }
 
 void Debugger::disassemble() {
@@ -265,23 +278,10 @@ void Debugger::disassemble() {
 }
 
 void Debugger::require_executable(Address address) {
-    std::ifstream file("/proc/" + std::to_string(child_) + "/maps");
-    if (!file) throw std::runtime_error("cannot validate breakpoint: process mappings are unavailable");
-    std::string line;
-    while (std::getline(file, line)) {
-        std::istringstream input(line);
-        std::string range, permissions;
-        if (!(input >> range >> permissions) || permissions.size() != 4)
-            throw std::runtime_error("cannot validate breakpoint: invalid process mapping");
-        auto dash = range.find('-');
-        if (dash == std::string::npos)
-            throw std::runtime_error("cannot validate breakpoint: invalid mapping range");
-        Address start = parse_number(range.substr(0, dash), 16);
-        Address end = parse_number(range.substr(dash + 1), 16);
-        if (address >= start && address < end) {
-            if (permissions[2] == 'x') return;
-            break;
-        }
+    for (const auto& map : process_maps(child_)) {
+        if (address < map.start || address >= map.end) continue;
+        if (map.permissions.size() == 4 && map.permissions[2] == 'x') return;
+        break;
     }
     std::ostringstream message;
     message << "cannot set breakpoint at 0x" << std::hex << address
@@ -356,6 +356,9 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
     if (child_ < 0) throw system_error("fork");
     if (!child_) {
         setpgid(0, 0);
+        // The debugger ignores SIGPIPE for its own tool pipes; the target must
+        // keep the default disposition across exec.
+        signal(SIGPIPE, SIG_DFL);
         if (!inherit_stdin) {
             int fd = open("/dev/null", O_RDONLY);
             if (fd < 0 || dup2(fd, STDIN_FILENO) < 0) { perror("target stdin"); _exit(126); }
@@ -368,7 +371,10 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
     }
     alive_ = true;
     interrupt_pid = child_;
-    target_running = pause_requested = quit_requested = 0;
+    invalidate_process_view();
+    target_running = 0;
+    pause_requested = 0;
+    quit_requested = 0;
     struct sigaction action{};
     action.sa_handler = on_interrupt;
     sigemptyset(&action.sa_mask);
@@ -390,6 +396,7 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
     if (!entry) throw std::runtime_error("cannot locate runtime entry point");
     if (registers().rip != entry) {
         add_breakpoint(entry, true);
+        invalidate_process_view();
         target_running = 1;
         trace(PTRACE_CONT);
         if (!wait_stop()) return;
@@ -718,12 +725,11 @@ bool Debugger::continue_execution() {
         cs_free(instruction, count);
         if (syscalls_ && syscall) {
             write_byte(rip, breakpoints_.at(rip).original);
+            ReArm rearm(*this, rip);
             target_running = 1;
             trace(PTRACE_SYSCALL, 0, reinterpret_cast<void*>(static_cast<intptr_t>(signal_)));
             signal_ = 0;
-            bool stopped = wait_stop();
-            if (stopped) write_byte(rip, 0xcc);
-            return stopped;
+            return wait_stop();
         }
         if (!single_step()) return false;
         if (signal_ || watch_hit_ || paused_ || pause_requested || quit_requested) {

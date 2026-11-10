@@ -23,4 +23,6 @@ struct LoadedObject {
 };
 std::vector<ProcessMapping> process_maps(pid_t pid);
 std::vector<LoadedObject> loaded_objects(pid_t pid);
+// Drops the per-stop mapping/object cache; call whenever the tracee is resumed.
+void invalidate_process_view();
 #endif

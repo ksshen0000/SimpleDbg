@@ -1,11 +1,15 @@
 #include "sdb.h"
 
+#include <csignal>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
 
 int main(int argc, char** argv) {
+    // Helper tools and the debugger itself may write to a pipe that the other
+    // end closed (Ctrl-C, pager exit); report EPIPE instead of dying.
+    std::signal(SIGPIPE, SIG_IGN);
     bool inherit_stdin = argc > 1 && std::string(argv[1]) == "--inherit-stdin";
     int program = inherit_stdin ? 2 : 1;
     if (argc <= program) { std::cerr << "Usage: " << argv[0] << " [--inherit-stdin] PROGRAM [ARGS...]\n"; return 1; }
