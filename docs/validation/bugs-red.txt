@@ -1,0 +1,42 @@
+test_executable_segment_data_symbol_is_rejected (__main__.DebuggerTests.test_executable_segment_data_symbol_is_rejected) ... FAIL
+test_pid_and_mappings_visible (__main__.DebuggerTests.test_pid_and_mappings_visible) ... FAIL
+test_shared_library_breakpoint (__main__.DebuggerTests.test_shared_library_breakpoint) ... FAIL
+test_fp_registers_visible (__main__.DebuggerTests.test_fp_registers_visible) ... FAIL
+test_target_stdin_isolated (__main__.DebuggerTests.test_target_stdin_isolated) ... ok
+
+======================================================================
+FAIL: test_executable_segment_data_symbol_is_rejected (__main__.DebuggerTests.test_executable_segment_data_symbol_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/kxshen/SimpleDbg/tests/test_debugger.py", line 486, in test_executable_segment_data_symbol_is_rejected
+    self.assertIn("error:", s.command("break msg"))
+AssertionError: 'error:' not found in '** set a breakpoint at 0x5dd2be605d64 (id 1).\n  0x5dd2be605aa0: endbr64 \n  0x5dd2be605aa4: xor ebp, ebp\n  0x5dd2be605aa6: mov r9, rdx\n  0x5dd2be605aa9: pop rsi\n  0x5dd2be605aaa: mov rdx, rsp\n'
+
+======================================================================
+FAIL: test_pid_and_mappings_visible (__main__.DebuggerTests.test_pid_and_mappings_visible)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/kxshen/SimpleDbg/tests/test_debugger.py", line 497, in test_pid_and_mappings_visible
+    self.assertIn("PID:", s.initial)
+AssertionError: 'PID:' not found in "** set a breakpoint at 0x5c2b8bcc0aa0 (id 1).\n** hit a breakpoint at 0x5c2b8bcc0aa0.\n** program '/tmp/tmpdmz4yez4/bugs' loaded. entry point 0x5c2b8bcc0aa0; load bias 0x5c2b8bcc0000.\n  0x5c2b8bcc0aa0: endbr64 \n  0x5c2b8bcc0aa4: xor ebp, ebp\n  0x5c2b8bcc0aa6: mov r9, rdx\n  0x5c2b8bcc0aa9: pop rsi\n  0x5c2b8bcc0aaa: mov rdx, rsp\n"
+
+======================================================================
+FAIL: test_shared_library_breakpoint (__main__.DebuggerTests.test_shared_library_breakpoint)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/kxshen/SimpleDbg/tests/test_debugger.py", line 504, in test_shared_library_breakpoint
+    self.assertIn("set a breakpoint", s.command("break puts"))
+AssertionError: 'set a breakpoint' not found in '** error: symbol not found: puts; use a hex runtime address for stripped binaries\n'
+
+======================================================================
+FAIL: test_fp_registers_visible (__main__.DebuggerTests.test_fp_registers_visible)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/kxshen/SimpleDbg/tests/test_debugger.py", line 510, in test_fp_registers_visible
+    self.assertIn(register + " = 0x", s.command("regs " + register))
+AssertionError: 'xmm0 = 0x' not found in '** error: unknown register: xmm0\n'
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.815s
+
+FAILED (failures=4)

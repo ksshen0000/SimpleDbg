@@ -11,7 +11,8 @@ import time
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdb", type=Path, default=Path(__file__).resolve().parents[1] / "build/sdb")
-    parser.add_argument("--delay", type=float, default=0.4, help="seconds between commands (default: 0.4)")
+    parser.add_argument("--delay", type=float, default=0, help="seconds between commands (default: 0, no delay)")
+    parser.add_argument("--extended", action="store_true", help="also replay backtrace, register/memory edits, watchpoint, finish and source position")
     parser.add_argument("--record", type=Path, help="save the displayed session as UTF-8 text")
     args = parser.parse_args()
     if args.delay < 0:
@@ -76,13 +77,28 @@ int main(void) {
             ("delete 2", "breakpoint 2: delete"),
             ("cont", "exited with status 3"),
         ]
+        if args.extended:
+            insertion = next(i for i, item in enumerate(commands) if item[0] == "timetravel") + 2
+            commands[insertion:insertion] = [
+                ("bt", "main+"),
+                ("watch counter 4", "set watchpoint 1"),
+                ("set $rax = 42", "register updated"),
+                ("regs rax", "000000000000002a"),
+                ("set mem counter 00000000", "wrote 4 bytes"),
+                ("finish", "hit watchpoint 1"),
+                ("x counter 4", ": 01 00 00 00"),
+                ("unwatch 1", "watchpoint removed"),
+                ("finish", "(sdb) "),
+                ("where", "demo.c:"),
+            ]
         try:
             output = receive()
             display(output)
             if "loaded. entry point" not in output:
                 raise RuntimeError("target failed to load")
             for command, expected in commands:
-                time.sleep(args.delay)
+                if args.delay:
+                    time.sleep(args.delay)
                 display(command + "\n")
                 process.stdin.write((command + "\n").encode())
                 process.stdin.flush()
@@ -93,7 +109,7 @@ int main(void) {
             process.wait(timeout=5)
             if process.returncode != 0:
                 raise RuntimeError(f"debugger exited with status {process.returncode}")
-            display("\nReplay passed: all 21 commands produced the expected results.\n")
+            display(f"\nReplay passed: all {len(commands)} commands produced the expected results.\n")
         finally:
             if process.poll() is None:
                 process.kill()

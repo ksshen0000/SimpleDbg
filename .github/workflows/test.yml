@@ -1,0 +1,30 @@
+name: Build and test
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizers: ["OFF", "ON"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y g++ libcapstone-dev cmake make python3 binutils
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSDB_ENABLE_SANITIZERS=${{ matrix.sanitizers }}
+      - name: Build
+        run: cmake --build build -j2
+      - name: Integration and failure tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Replay
+        run: python3 tests/replay_demo.py --delay 0 --record build/demo-session.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-sanitizers-${{ matrix.sanitizers }}
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/demo-session.txt

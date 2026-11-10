@@ -1,0 +1,55 @@
+BASELINE thread
+** set a breakpoint at 0x5c50eb70c100 (id 1).
+** hit a breakpoint at 0x5c50eb70c100.
+** program '/tmp/sdb-baseline-2pjacq1p/target' loaded. entry point 0x5c50eb70c100; load bias 0x5c50eb70b000.
+  0x5c50eb70c100: endbr64
+  0x5c50eb70c104: xor ebp, ebp
+  0x5c50eb70c106: mov r9, rdx
+  0x5c50eb70c109: pop rsi
+  0x5c50eb70c10a: mov rdx, rsp
+(sdb) ** set a breakpoint at 0x5c50eb70c1e9 (id 1).
+  0x5c50eb70c100: endbr64
+  0x5c50eb70c104: xor ebp, ebp
+  0x5c50eb70c106: mov r9, rdx
+  0x5c50eb70c109: pop rsi
+  0x5c50eb70c10a: mov rdx, rsp
+(sdb) ** target terminated by signal 5.
+
+BASELINE exec
+** set a breakpoint at 0x629b25689100 (id 1).
+** hit a breakpoint at 0x629b25689100.
+** program '/tmp/sdb-baseline-2pjacq1p/target' loaded. entry point 0x629b25689100; load bias 0x629b25688000.
+  0x629b25689100: endbr64
+  0x629b25689104: xor ebp, ebp
+  0x629b25689106: mov r9, rdx
+  0x629b25689109: pop rsi
+  0x629b2568910a: mov rdx, rsp
+(sdb) ** stopped by signal 5 (forwarded on resume).
+  0x7ab23ceff540: mov rdi, rsp
+  0x7ab23ceff543: call 0x7ab23cf001d0
+  0x7ab23ceff548: mov r12, rax
+  0x7ab23ceff54b: mov r13, rsp
+  0x7ab23ceff54e: mov edx, dword ptr [rip + 0x19b14]
+(sdb) ** target terminated by signal 5.
+
+BASELINE loop returncode=-2
+** set a breakpoint at 0x59448144c100 (id 1).
+** hit a breakpoint at 0x59448144c100.
+** program '/tmp/sdb-baseline-2pjacq1p/target' loaded. entry point 0x59448144c100; load bias 0x59448144b000.
+  0x59448144c100: endbr64
+  0x59448144c104: xor ebp, ebp
+  0x59448144c106: mov r9, rdx
+  0x59448144c109: pop rsi
+  0x59448144c10a: mov rdx, rsp
+(sdb)
+BASELINE read returncode=0
+** set a breakpoint at 0x6398e597b100 (id 1).
+** hit a breakpoint at 0x6398e597b100.
+** program '/tmp/sdb-baseline-2pjacq1p/target' loaded. entry point 0x6398e597b100; load bias 0x6398e597a000.
+  0x6398e597b100: endbr64
+  0x6398e597b104: xor ebp, ebp
+  0x6398e597b106: mov r9, rdx
+  0x6398e597b109: pop rsi
+  0x6398e597b10a: mov rdx, rsp
+(sdb) INPUT:regs rip
+** target exited with status 0.
