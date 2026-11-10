@@ -299,6 +299,14 @@ second:
         self.assertIn("error:", s.command("set disasm maybe"))
         self.assertIn("rax = 0x", s.command("info registers rax"))
 
+    def test_examine_string(self):
+        s = self.session("bugs")
+        output = s.command("x/s msg")
+        self.assertIn('"hello"', output)
+        self.assertIn("error:", s.command("x/s"))
+        self.assertIn("error:", s.command("x/s msg 0"))
+        self.assertIn("error:", s.command("x/s msg 4097"))
+
     def test_address_offsets(self):
         s = self.session()
         address = self.address(s, "pie", "tick")

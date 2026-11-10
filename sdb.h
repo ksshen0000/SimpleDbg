@@ -134,6 +134,7 @@ private:
     Address resolve_address_base(const std::string& request, bool code, bool& raw);
     void show_registers(const std::string& name);
     void examine_memory(Address address, size_t count);
+    void examine_string(Address address, size_t count);
     Snapshot capture_snapshot();
     void apply_snapshot(const Snapshot& snapshot);
     void anchor();

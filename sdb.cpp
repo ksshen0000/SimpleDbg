@@ -194,7 +194,7 @@ void print_help(const std::string& topic) {
             "break <symbol|hex runtime address> | break file:line\n"
             "cont, si, next/ni (instruction step-over), finish, bt (frame pointers)\n"
             "where, list, step (source line; requires binutils and DWARF)\n"
-            "regs [register|fp], x <address|symbol|$register> [decimal byte count]\n"
+            "regs [register|fp], x <address|symbol|$register> [decimal byte count], x/s <address> [max]\n"
             "set $register = <unsigned integer>; set mem <address|symbol> <hexbytes>; set disasm on|off\n"
             "watch/rwatch <address|symbol> [1|2|4|8], unwatch <id>, catch syscall [all|off|number]\n"
             "info breakpoints/watchpoints/registers/proc/sharedlibrary; info proc mappings\n"
@@ -219,6 +219,8 @@ void print_help(const std::string& topic) {
         {"step", "step (alias s)\nStep one source line, executing at most 256 instructions.\n"},
         {"regs", "regs [register|fp]\nShow general registers, or FP/SIMD state for fp/xmm/ymm/st/mxcsr.\n"},
         {"x", "x <address|symbol|$register>[+/-N] [decimal byte count]\nExamine 1..4096 bytes, default 16.\n"},
+        {"x/s", "x/s <address|symbol|$register>[+/-N] [decimal max bytes]\n"
+                "Print a NUL-terminated string with escapes; default 128 bytes (max 4096).\n"},
         {"set", "set $register = <unsigned integer>\nset mem <address|symbol> <hexbytes>\n"
                 "set disasm on|off\n"
                 "Registers are decimal or 0x-hex; memory writes use raw hexadecimal bytes without 0x.\n"
@@ -644,6 +646,12 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
             } else if (command == "regs") {
                 if (args.size() > 2) throw std::runtime_error("usage: regs [register]");
                 show_registers(args.size() == 2 ? args[1] : "");
+            } else if (command == "x/s") {
+                if (args.size() < 2 || args.size() > 3)
+                    throw std::runtime_error("usage: x/s <address|symbol|$register> [decimal max bytes]");
+                uint64_t count = args.size() == 3 ? parse_number(args[2], 10) : 128;
+                if (!count || count > 4096) throw std::runtime_error("max bytes must be 1..4096");
+                examine_string(resolve_address(args[1]), static_cast<size_t>(count));
             } else if (command == "x") {
                 if (args.size() < 2 || args.size() > 3) throw std::runtime_error("usage: x <address|symbol|$register> [decimal byte count]");
                 uint64_t count = args.size() == 3 ? parse_number(args[2], 10) : 16;
@@ -895,6 +903,32 @@ void Debugger::show_registers(const std::string& name) {
     } else {
         for (const auto& [key, value] : values) print(key, value);
     }
+}
+
+void Debugger::examine_string(Address address, size_t count) {
+    auto bytes = read_memory(address, count, true);
+    if (bytes.empty()) throw std::runtime_error("cannot read a string at this address");
+    std::string text;
+    bool terminated = false;
+    for (uint8_t byte : bytes) {
+        if (!byte) { terminated = true; break; }
+        switch (byte) {
+            case '\n': text += "\\n"; break;
+            case '\t': text += "\\t"; break;
+            case '\r': text += "\\r"; break;
+            case '\\': text += "\\\\"; break;
+            case '"': text += "\\\""; break;
+            default:
+                if (byte >= 0x20 && byte < 0x7f) text.push_back(static_cast<char>(byte));
+                else {
+                    char escaped[8];
+                    std::snprintf(escaped, sizeof(escaped), "\\x%02x", byte);
+                    text += escaped;
+                }
+        }
+    }
+    std::cout << "0x" << std::hex << address << std::dec << ": \"" << text << "\""
+              << (terminated ? "" : " ... (no NUL in range)") << '\n';
 }
 
 void Debugger::examine_memory(Address address, size_t count) {
