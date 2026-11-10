@@ -82,6 +82,16 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 6. 后续增量（持续优化）
 
+夜间共 15 个增量批次，每批独立提交，均保持 Debug/Release 测试、回放与文档同步：
+
+- **交互与命令行**（1、4、5）：别名与单命令帮助、`delete all`、`list 行号`、
+  `*地址`、`--help`、`set disasm on|off`、`info registers`。
+- **断点与监视点**（2、7、11、15）：信号名、失效断点管理、读/访问监视点、
+  批量 enable/disable/unwatch、`regs rip` 与 `(unmapped)` 标注。
+- **源码与符号**（3、6、8、10、13、14）：`bt` 源码位置、地址偏移、syscall 名称、
+  断点源码标注、`x/s`、`bt 帧数`、深递归边界。
+- **健壮性**（9、12）：批量读回退故障注入、多编号 syscall 过滤。
+
 ### 批次 1：命令行可用性
 
 - `help [command]` 提供单条命令帮助；未知主题给出明确错误。
@@ -190,4 +200,4 @@ python3 tests/bench.py --sdb build-release/sdb
 - `regs rip` 在地址值后附带可用的 `符号+偏移` 与 `at 文件:行`；完整的 `regs` 列表保持
   单次 ptrace 读取的轻量输出。
 - `info breakpoints` 对地址已解除映射的断点标注 `(unmapped)`。
-- 新增回归：rip 注解与 unmmapped 标注；测试总数 88。
+- 新增回归：rip 注解与 unmapped 标注；测试总数 88。
