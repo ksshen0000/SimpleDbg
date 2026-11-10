@@ -116,7 +116,8 @@ void print_help(const std::string& topic) {
     }
     static const std::map<std::string, std::string> topics = {
         {"break", "break <symbol|hex runtime address> | break <file>:<line>\n"
-                  "Set a software breakpoint. Symbols must resolve to code; raw addresses must point at an instruction boundary.\n"},
+                  "Set a software breakpoint. Symbols must resolve to code; raw addresses must point at an instruction boundary.\n"
+                  "Address expressions accept symbols, $registers, 0x addresses and an optional +N/-N offset.\n"},
         {"cont", "cont (alias c)\nContinue until a breakpoint, watchpoint, captured syscall, signal or exit.\n"},
         {"si", "si\nSingle-step one instruction.\n"},
         {"next", "next / ni (alias n)\nStep over a call by running to the return address.\n"},
@@ -126,7 +127,7 @@ void print_help(const std::string& topic) {
         {"list", "list\nShow the source around the current instruction (requires DWARF).\n"},
         {"step", "step (alias s)\nStep one source line, executing at most 256 instructions.\n"},
         {"regs", "regs [register|fp]\nShow general registers, or FP/SIMD state for fp/xmm/ymm/st/mxcsr.\n"},
-        {"x", "x <address|symbol|$register> [decimal byte count]\nExamine 1..4096 bytes, default 16.\n"},
+        {"x", "x <address|symbol|$register>[+/-N] [decimal byte count]\nExamine 1..4096 bytes, default 16.\n"},
         {"set", "set $register = <unsigned integer>\nset mem <address|symbol> <hexbytes>\n"
                 "set disasm on|off\n"
                 "Registers are decimal or 0x-hex; memory writes use raw hexadecimal bytes without 0x.\n"
@@ -690,15 +691,12 @@ std::map<std::string, Address> register_values(const user_regs_struct& r) {
 }
 }
 
-Address Debugger::resolve_address(const std::string& value, bool code) {
-    // GDB-style `*address` is accepted so `break *0x...` works as expected.
-    const std::string request = (!value.empty() && value[0] == '*') ? value.substr(1) : value;
-    if (request.empty()) throw std::runtime_error("missing address after '*'");
+Address Debugger::resolve_address_base(const std::string& request, bool code, bool& raw) {
     if (request[0] == '$') {
         auto values = register_values(registers());
         auto found = values.find(request.substr(1));
-        if (found == values.end()) throw std::runtime_error("unknown register: " + value);
-        if (code) validate_address_breakpoint(found->second);
+        if (found == values.end()) throw std::runtime_error("unknown register: " + request);
+        raw = true;
         return found->second;
     }
     auto colon = request.find_last_of(':');
@@ -714,11 +712,56 @@ Address Debugger::resolve_address(const std::string& value, bool code) {
     }
     bool hex = request.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
     if (hex || request.rfind("0x", 0) == 0 || request.rfind("0X", 0) == 0) {
-        auto address = parse_number(request, 16);
-        if (code) validate_address_breakpoint(address);
-        return address;
+        raw = true;
+        return parse_number(request, 16);
     }
     return resolve_symbol(request, code);
+}
+
+Address Debugger::resolve_address(const std::string& value, bool code) {
+    // GDB-style `*address` is accepted so `break *0x...` works as expected.
+    const std::string request = (!value.empty() && value[0] == '*') ? value.substr(1) : value;
+    if (request.empty()) throw std::runtime_error("missing address after '*'");
+    // A trailing +N / -N (decimal or 0x hex) is an offset from a symbol,
+    // register or address: `x $rsp+16`, `break main+4`, `x 0x1000-8`.
+    uint64_t offset = 0;
+    bool subtract = false, has_offset = false;
+    size_t separator = std::string::npos;
+    for (size_t i = request.size(); i > 1 && !has_offset; --i) {
+        const char sign = request[i - 1];
+        if (sign != '+' && sign != '-') continue;
+        const std::string tail = request.substr(i);
+        if (tail.empty()) continue;
+        const int tail_base = tail.size() > 1 && tail[0] == '0' && (tail[1] == 'x' || tail[1] == 'X') ? 16 : 10;
+        try {
+            size_t consumed = 0;
+            const uint64_t parsed = std::stoull(tail, &consumed, tail_base);
+            if (consumed != tail.size()) continue;
+            offset = parsed;
+            subtract = sign == '-';
+            separator = i - 1;
+            has_offset = true;
+        } catch (const std::exception&) {
+            continue;
+        }
+    }
+    const std::string base = has_offset ? request.substr(0, separator) : request;
+    if (base.empty()) throw std::runtime_error("invalid address: " + value);
+    bool raw = false;
+    Address address = resolve_address_base(base, code, raw);
+    if (has_offset) {
+        if (subtract) {
+            if (address < offset) throw std::runtime_error("address underflow: " + value);
+            address -= offset;
+        } else {
+            if (address > UINT64_MAX - offset) throw std::runtime_error("address overflow: " + value);
+            address += offset;
+        }
+    }
+    // Symbol lookups stay silent; raw addresses, registers and offset
+    // expressions cannot be checked against instruction boundaries.
+    if (code && (raw || has_offset)) validate_address_breakpoint(address);
+    return address;
 }
 
 void Debugger::show_registers(const std::string& name) {

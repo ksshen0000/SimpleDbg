@@ -299,6 +299,18 @@ second:
         self.assertIn("error:", s.command("set disasm maybe"))
         self.assertIn("rax = 0x", s.command("info registers rax"))
 
+    def test_address_offsets(self):
+        s = self.session()
+        address = self.address(s, "pie", "tick")
+        self.assertIn("set a breakpoint", s.command(f"break 0x{address:x}+0"))
+        self.assertIn("already exists", s.command("break tick+0"))
+        self.assertRegex(s.command("x $rsp+8 8"), r"0x[0-9a-f]+:")
+        self.assertIn("underflow", s.command("x 0x10-0x20"))
+        self.assertIn("error:", s.command("x $bogus+8 8"))
+        for _ in range(3):
+            self.assertIn("hit a breakpoint", s.command("cont"))
+        self.assertIn("exited with status 3", s.command("cont"))
+
     def test_star_address_syntax(self):
         s = self.session()
         address = self.address(s, "pie", "tick")

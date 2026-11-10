@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；79 项测试
-  （集成 50、工作流 22、故障注入 7）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；80 项测试
+  （集成 51、工作流 22、故障注入 7）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -123,3 +123,11 @@ python3 tests/bench.py --sdb build-release/sdb
   脚本化工作流；非法参数报用法错误。
 - `info registers [名字]` 作为 `regs` 的等价入口，方便 GDB 习惯。
 - 新增集成测试覆盖开关的前后行为与非法参数；测试总数 79。
+
+### 批次 6：地址偏移表达式
+
+- `resolve_address` 支持 `符号`、`$寄存器`、`0x` 地址后追加 `+N`/`-N`（十进制或 `0x`），
+  例如 `break main+4`、`x $rsp+16 8`、`x 0x1000-8`；溢出/下溢给出明确错误。
+- 符号查询保持原有“不打印地址边界警告”的行为；只有原始地址、寄存器和偏移表达式才提示
+  无法验证指令边界。
+- 新增集成测试覆盖偏移、下溢与未知寄存器；测试总数 80。
