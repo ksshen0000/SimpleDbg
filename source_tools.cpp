@@ -277,6 +277,24 @@ bool contains_debug_line(const std::string& path) {
     return bytes.find(".debug_line") != std::string::npos;
 }
 
+// Cheap negative check so `bt`/`where` do not spawn addr2line for objects
+// without DWARF (for example libc). Result is cached per file identity.
+bool debug_line_available(const std::string& object) {
+    struct Cached {
+        struct stat identity{};
+        bool present = false;
+    };
+    static std::map<std::string, Cached> cache;
+    struct stat identity{};
+    if (stat(object.c_str(), &identity) < 0) return false;
+    auto found = cache.find(object);
+    if (found != cache.end() && same_file(found->second.identity, identity)) return found->second.present;
+    bool present = contains_debug_line(object);
+    if (cache.size() >= 16) cache.erase(cache.begin());
+    cache[object] = {identity, present};
+    return present;
+}
+
 std::shared_ptr<const LineTable> line_table_for(const std::string& object) {
     struct Cached {
         struct stat identity{};
@@ -288,7 +306,7 @@ std::shared_ptr<const LineTable> line_table_for(const std::string& object) {
     auto found = cache.find(object);
     if (found != cache.end() && same_file(found->second.identity, identity)) return found->second.table;
     auto table = std::make_shared<LineTable>();
-    if (contains_debug_line(object))
+    if (debug_line_available(object))
         table->parse(run_source_tool({"readelf", "--debug-dump=decodedline", "--wide", object}));
     if (cache.size() >= 8) cache.erase(cache.begin());
     cache[object] = {identity, table};
@@ -352,6 +370,8 @@ std::string run_source_tool(const std::vector<std::string>& arguments) {
 }
 
 std::string source_location(const std::string& object, uint64_t address) {
+    if (!debug_line_available(object))
+        throw std::runtime_error("source location unavailable; rebuild with -g");
     std::string output;
     try {
         output = addr2line_for(object).locate(address);
@@ -362,10 +382,23 @@ std::string source_location(const std::string& object, uint64_t address) {
         auto end = output.find('\n');
         if (end != std::string::npos) output.resize(end);
     }
-    if (output.empty() || output.rfind("??", 0) == 0)
-        throw std::runtime_error("source location unavailable; rebuild with -g");
     auto annotation = output.find(" (discriminator ");
     if (annotation != std::string::npos) output.resize(annotation);
+    while (!output.empty() && (output.back() == '\r' || output.back() == ' ')) output.pop_back();
+    // addr2line reports missing DWARF as "??:0", "??:?" or ":?"; require a
+    // non-empty file name and a positive decimal line.
+    auto colon = output.find_last_of(':');
+    if (colon == std::string::npos || colon == 0) throw std::runtime_error("source location unavailable; rebuild with -g");
+    const std::string file = output.substr(0, colon);
+    const std::string line = output.substr(colon + 1);
+    if (file == "??" || file.find_first_not_of('?') == std::string::npos ||
+        line.empty() || line.find_first_not_of("0123456789") != std::string::npos)
+        throw std::runtime_error("source location unavailable; rebuild with -g");
+    try {
+        if (std::stoul(line) == 0) throw std::runtime_error("source location unavailable; rebuild with -g");
+    } catch (const std::out_of_range&) {
+        throw std::runtime_error("source location unavailable; rebuild with -g");
+    }
     return output;
 }
 

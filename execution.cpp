@@ -1,4 +1,5 @@
 #include "sdb.h"
+#include "source_tools.h"
 #include <algorithm>
 #include <cstring>
 #include <iostream>
@@ -135,7 +136,13 @@ void Debugger::backtrace() {
         for (const auto& object : objects) {
             if (address < object.bias) continue;
             auto symbol = object.symbols->describe(address - object.bias);
-            if (symbol != "??") return symbol + " (" + object.path + ")";
+            if (symbol == "??") continue;
+            std::string text = symbol + " (" + object.path + ")";
+            // Source information is optional; frames without DWARF keep the
+            // symbol-only form printed by earlier versions.
+            try { text += " at " + source_location(object.path, address - object.bias); }
+            catch (const std::exception&) {}
+            return text;
         }
         return std::string("??");
     };

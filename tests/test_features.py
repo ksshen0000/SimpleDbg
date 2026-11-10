@@ -170,6 +170,7 @@ int main(void) {
         self.assertIn("leaf+", output)
         self.assertGreaterEqual(output.count("recurse+"), 4, output)
         self.assertIn("main+", output)
+        self.assertIn("features.c:", output)
         s.command("finish")
         self.assertIn(": 01 00 00 00", s.command("x counter 4"))
         self.assertIn("exited with status 1", s.command("cont"))
