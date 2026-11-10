@@ -22,7 +22,10 @@ std::pair<std::string, Address> Debugger::source_object() {
 void Debugger::show_source(bool listing, unsigned requested_line) {
     auto object = source_object();
     auto location = source_location(object.first, object.second);
-    std::cout << location << '\n';
+    std::cout << location;
+    auto function = symbol_name(registers().rip);
+    if (!function.empty()) std::cout << "  in " << function;
+    std::cout << '\n';
     if (!listing) return;
     auto colon = location.find_last_of(':');
     if (colon == std::string::npos) throw std::runtime_error("invalid source location");

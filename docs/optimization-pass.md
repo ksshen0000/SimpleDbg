@@ -201,3 +201,9 @@ python3 tests/bench.py --sdb build-release/sdb
   单次 ptrace 读取的轻量输出。
 - `info breakpoints` 对地址已解除映射的断点标注 `(unmapped)`。
 - 新增回归：rip 注解与 unmapped 标注；测试总数 88。
+
+### 批次 16：源码位置附带函数名
+
+- `where`/`list` 的定位行在可解析时追加 `in 符号+偏移`，例如
+  `/path/features.c:8  in ready+0`。
+- 源码行断点测试增加函数名断言；测试总数保持 88。
