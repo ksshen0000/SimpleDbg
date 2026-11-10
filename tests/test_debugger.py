@@ -551,7 +551,7 @@ second:
         commands = ("break no_such_symbol", "regs bogus", "regs rip extra", "x", "x 0", "x $bogus",
                     "x counter 0", "x counter 4097", "x counter -1", "x counter 4junk",
                     "x ffffffffffffffff 2", "delete 0", "enable 999", "disable -1", "delete 4294967296",
-                    "info", "info unknown", "delete", "enable 1 extra")
+                    "info", "info unknown", "delete", "enable 1 extra", "catch syscall 1,,")
         for command in commands:
             with self.subTest(command=command):
                 self.assertIn("error:", s.command(command))
@@ -842,7 +842,7 @@ second:
         s = self.session("blocking")
         s.command("break blocked_syscall")
         s.command("cont")
-        s.command("catch syscall 0")
+        self.assertIn("enabled for: 0 1", s.command("catch syscall 1,0"))
         self.assertIn("syscall entry 0 (read)", s.command("cont"))
 
     def test_snapshot_rejects_pending_signal_without_consuming_it(self):

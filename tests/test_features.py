@@ -251,7 +251,7 @@ int main(void) {
         s = self.session("syscall")
         s.command("break ready")
         s.command("cont")
-        s.command("catch syscall 39")
+        self.assertIn("enabled for: 0 39", s.command("catch syscall 0,39"))
         output = s.command("cont")
         self.assertIn("syscall entry 39", output)
         self.assertIn("(getpid)", output)

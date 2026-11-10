@@ -65,7 +65,7 @@ PID、入口地址和加载偏移。反汇编直接读取运行内存，不要�
 | `watch counter [大小]` | 硬件写监视点，默认 4 字节，大小支持 1/2/4/8 |
 | `rwatch` / `awatch counter [大小]` | 硬件读 / 访问监视点；x86 没有只读数据监视点，读配置在写时也会触发 |
 | `unwatch 编号` / `unwatch all` | 删除单个或全部硬件监视点 |
-| `catch syscall [all/off/编号]` | 捕获 syscall 入口和出口；编号为十进制 Linux x86-64 syscall 号 |
+| `catch syscall [all/off/编号[,编号...]]` | 捕获 syscall 入口和出口；编号为十进制 Linux x86-64 syscall 号 |
 | `info breakpoints` / `info watchpoints` | 查看断点 / 监视点 |
 | `info registers [名字]` | 与 `regs` 相同的寄存器查看入口 |
 | `info proc` | PID、PPID、可执行路径、入口和加载偏移 |
@@ -158,7 +158,8 @@ cont
 调试器自身的 ptrace 内存修改不会触发 CPU 写监视点。监视点与软件断点分开编号。
 目前不提供只读/读写监视点或条件表达式。
 
-`catch syscall 39` 可观察 getpid，`catch syscall 1` 观察 write；输出入口的六个原始
+`catch syscall 39` 可观察 getpid，`catch syscall 1` 观察 write，`catch syscall 0,1,59`
+可一次过滤多个编号；输出入口的六个原始
 参数和出口的有符号返回值，并附常见 x86-64 syscall 名称（如 `getpid`）。`catch syscall off` 关闭捕获，模式保留到主动关闭。
 程序退出类 syscall 没有返回，所以只会看到入口及目标退出。
 入口/出口识别要求 Linux 5.3+ 的 GET_SYSCALL_INFO；请求失败时明确关闭捕获，

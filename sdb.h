@@ -120,7 +120,7 @@ private:
     bool watch_hit_ = false;
     bool syscalls_ = false;
     bool syscall_stop_ = false;
-    int64_t syscall_filter_ = -1;
+    std::set<int64_t> syscall_filters_;
     Address syscall_number_ = 0;
     void catch_command(const std::vector<std::string>& args);
     void list_breakpoints() const;

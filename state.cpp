@@ -5,6 +5,8 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 
 namespace {
@@ -288,16 +290,31 @@ void Debugger::watch_command(const std::vector<std::string>& args) {
 
 void Debugger::catch_command(const std::vector<std::string>& args) {
     if (args.size() < 2 || args.size() > 3 || args[1] != "syscall")
-        throw std::runtime_error("usage: catch syscall [all|off|decimal syscall number]");
+        throw std::runtime_error("usage: catch syscall [all|off|decimal numbers]");
     if (args.size() == 3 && args[2] == "off") {
         syscalls_ = false;
         std::cout << "** syscall catching disabled.\n";
         return;
     }
-    bool all = args.size() == 2 || args[2] == "all";
-    auto filter = all ? 0 : number(args[2], 10);
-    if (filter > 0x7fffffff) throw std::runtime_error("invalid syscall number");
-    syscall_filter_ = all ? -1 : static_cast<int64_t>(filter);
+    if (args.size() == 2 || (args.size() == 3 && args[2] == "all")) {
+        syscall_filters_.clear();
+        syscalls_ = true;
+        std::cout << "** syscall catching enabled for all syscalls.\n";
+        return;
+    }
+    std::set<int64_t> filters;
+    std::istringstream input(args[2]);
+    std::string token;
+    while (std::getline(input, token, ',')) {
+        if (token.empty()) throw std::runtime_error("invalid syscall number list");
+        auto value = number(token, 10);
+        if (value > 0x7fffffff) throw std::runtime_error("invalid syscall number");
+        filters.insert(static_cast<int64_t>(value));
+    }
+    if (filters.empty()) throw std::runtime_error("invalid syscall number list");
+    syscall_filters_ = std::move(filters);
     syscalls_ = true;
-    std::cout << "** syscall catching enabled.\n";
+    std::cout << "** syscall catching enabled for:";
+    for (int64_t filter : syscall_filters_) std::cout << ' ' << filter;
+    std::cout << ".\n";
 }

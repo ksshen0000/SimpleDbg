@@ -229,7 +229,8 @@ void print_help(const std::string& topic) {
         {"rwatch", "rwatch <address|symbol> [1|2|4|8]\nSet a read watchpoint. x86 has no read-only watchpoint, so writes also trigger.\n"},
         {"awatch", "awatch <address|symbol> [1|2|4|8]\nSet a read/write (access) watchpoint; same encoding as rwatch.\n"},
         {"unwatch", "unwatch <watchpoint id|all>\nRemove one or all hardware watchpoints.\n"},
-        {"catch", "catch syscall [all|off|decimal number]\nCapture syscall entries and exits (Linux 5.3+).\n"},
+        {"catch", "catch syscall [all|off|number[,number...]]\n"
+                  "Capture syscall entries and exits (Linux 5.3+); comma-separated filters are supported.\n"},
         {"info", "info breakpoints | watchpoints | registers [name] | proc [mappings] | sharedlibrary\n"
                  "Show debugger and target state.\n"},
         {"delete", "delete <id> | delete all (alias del)\nRemove software breakpoints and restore their original bytes.\n"},
@@ -376,9 +377,13 @@ bool Debugger::wait_stop(bool stepping) {
             syscalls_ = false;
             throw std::runtime_error(std::string("syscall information unavailable; catching disabled: ") + error.what());
         }
+        auto wanted = [&] {
+            return syscall_filters_.empty() ||
+                   syscall_filters_.count(static_cast<int64_t>(syscall_number_)) != 0;
+        };
         if (info.op == PTRACE_SYSCALL_INFO_ENTRY) {
             syscall_number_ = info.entry.nr;
-            if (syscall_filter_ < 0 || syscall_number_ == static_cast<Address>(syscall_filter_)) {
+            if (wanted()) {
                 std::cout << "** syscall entry " << syscall_number_;
                 if (const char* name = syscall_name(syscall_number_)) std::cout << " (" << name << ")";
                 std::cout << " args:";
@@ -388,7 +393,7 @@ bool Debugger::wait_stop(bool stepping) {
             }
         } else if (info.op == PTRACE_SYSCALL_INFO_EXIT) {
             syscall_number_ = registers().orig_rax;
-            if (syscall_filter_ < 0 || syscall_number_ == static_cast<Address>(syscall_filter_)) {
+            if (wanted()) {
                 std::cout << "** syscall exit " << syscall_number_ << " result: " << info.exit.rval;
                 if (const char* name = syscall_name(syscall_number_)) std::cout << " (" << name << ")";
                 std::cout << '\n';
