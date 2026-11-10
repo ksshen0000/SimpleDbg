@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；75 项测试
-  （集成 47、工作流 21、故障注入 7）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；76 项测试
+  （集成 47、工作流 22、故障注入 7）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -91,3 +91,12 @@ python3 tests/bench.py --sdb build-release/sdb
 - `delete all` 批量删除断点并尽量恢复原始字节；恢复失败时给出计数告警。
 - `info breakpoints` 追加 ELF 符号描述（如 `work+0`），不改变原有列格式。
 - 新增集成测试覆盖别名、单命令帮助、`delete all` 与符号描述；测试总数 75。
+
+### 批次 2：断点生命周期与信号可读性
+
+- 目标 `munmap`/`dlclose` 解除映射后，`delete`/`disable` 只更新调试器元数据并提示
+  “no longer mapped”，不再因 `PTRACE_POKEDATA` 失败而无法删除；`delete all` 同样跳过
+  已解除映射的地址。
+- 信号停止/终止信息附加常见信号名（如 `stopped by signal 11 (SIGSEGV)`），保留原有
+  数字文本以兼容脚本和测试。
+- 新增回归：RWX 代码页解除映射后删除断点；信号名断言。测试总数 76。

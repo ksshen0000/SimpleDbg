@@ -62,6 +62,16 @@ int main(int argc, char **argv) {
         ready();
         return cross_ptr[0] == 0x44 && cross_ptr[1] == 0x33 ? 0 : 93;
     }
+    if (mode == 'x') {
+        code_ptr = mmap(0,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+        if (code_ptr == MAP_FAILED) return 90;
+        *(unsigned char *)code_ptr = 0xc3;
+        if (mprotect(code_ptr,4096,PROT_READ|PROT_EXEC)) return 91;
+        ready();
+        munmap(code_ptr,4096);
+        ready();
+        return 0;
+    }
     ready();
     if (mode == 'd') { hardware_write(); return counter; }
     if (mode == 's') { syscall(SYS_getpid); return 0; }
@@ -89,6 +99,22 @@ int main(int argc, char **argv) {
         offset = int(re.search(r"^([0-9a-f]+) \w " + name + "$", symbols, re.M)[1], 16)
         bias = int(re.search(r"load bias 0x([0-9a-f]+)", s.initial)[1], 16)
         return offset + bias
+
+    def test_delete_breakpoint_after_region_is_unmapped(self):
+        s = self.session("xunmap")
+        self.assertIn("set a breakpoint", s.command("break ready"))
+        self.assertIn("hit a breakpoint", s.command("cont"))
+        data = s.command("x code_ptr 8").strip().split(":", 1)[1].split()
+        address = int.from_bytes(bytes(int(value, 16) for value in data[:8]), "little")
+        self.assertIn("set a breakpoint", s.command(f"break 0x{address:x}"))
+        self.assertIn("hit a breakpoint", s.command("cont"))
+        output = s.command("delete 2")
+        self.assertIn("breakpoint 2: delete", output)
+        self.assertIn("no longer mapped", output)
+        listing = s.command("info breakpoints")
+        self.assertIn("1  enabled", listing)
+        self.assertNotIn("2  enabled", listing)
+        self.assertIn("exited with status 0", s.command("cont"))
 
     def test_target_keeps_default_sigpipe_disposition(self):
         source = self.root / "sigpipe.c"

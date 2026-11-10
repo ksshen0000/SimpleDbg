@@ -59,6 +59,32 @@ uint64_t parse_number(const std::string& value, int base) {
     if (consumed != value.size()) throw std::runtime_error("invalid number: " + value);
     return number;
 }
+const char* signal_name(int number) {
+    switch (number) {
+        case SIGHUP: return "SIGHUP";
+        case SIGINT: return "SIGINT";
+        case SIGQUIT: return "SIGQUIT";
+        case SIGILL: return "SIGILL";
+        case SIGTRAP: return "SIGTRAP";
+        case SIGABRT: return "SIGABRT";
+        case SIGBUS: return "SIGBUS";
+        case SIGFPE: return "SIGFPE";
+        case SIGKILL: return "SIGKILL";
+        case SIGUSR1: return "SIGUSR1";
+        case SIGSEGV: return "SIGSEGV";
+        case SIGUSR2: return "SIGUSR2";
+        case SIGPIPE: return "SIGPIPE";
+        case SIGALRM: return "SIGALRM";
+        case SIGCHLD: return "SIGCHLD";
+        case SIGCONT: return "SIGCONT";
+        case SIGSTOP: return "SIGSTOP";
+        case SIGTSTP: return "SIGTSTP";
+        case SIGTTIN: return "SIGTTIN";
+        case SIGTTOU: return "SIGTTOU";
+        case SIGSYS: return "SIGSYS";
+        default: return nullptr;
+    }
+}
 const std::map<std::string, std::string>& command_aliases() {
     static const std::map<std::string, std::string> aliases = {
         {"b", "break"}, {"c", "cont"}, {"continue", "cont"}, {"s", "step"},
@@ -205,7 +231,11 @@ bool Debugger::wait_stop(bool stepping) {
         alive_ = false;
         interrupt_pid = 0;
         if (WIFEXITED(status)) std::cout << "** target exited with status " << WEXITSTATUS(status) << ".\n";
-        else std::cout << "** target terminated by signal " << WTERMSIG(status) << ".\n";
+        else {
+            std::cout << "** target terminated by signal " << WTERMSIG(status);
+            if (const char* name = signal_name(WTERMSIG(status))) std::cout << " (" << name << ")";
+            std::cout << ".\n";
+        }
         return false;
     }
     if (!WIFSTOPPED(status)) throw std::runtime_error("unexpected process state");
@@ -296,7 +326,11 @@ bool Debugger::wait_stop(bool stepping) {
             signal_ = 0;
         }
     }
-    if (signal_) std::cout << "** stopped by signal " << signal_ << " (forwarded on resume).\n";
+    if (signal_) {
+        std::cout << "** stopped by signal " << signal_;
+        if (const char* name = signal_name(signal_)) std::cout << " (" << name << ")";
+        std::cout << " (forwarded on resume).\n";
+    }
     return true;
     }
 }
@@ -557,6 +591,13 @@ std::string Debugger::symbol_name(Address address) const {
     return {};
 }
 
+bool Debugger::mapped(Address address) const {
+    for (const auto& map : process_maps(child_)) {
+        if (address >= map.start && address < map.end) return true;
+    }
+    return false;
+}
+
 void Debugger::list_breakpoints() const {
     std::cout << "ID  State     Address\n";
     if (breakpoints_.empty()) std::cout << "** no breakpoints.\n";
@@ -576,7 +617,7 @@ void Debugger::delete_all_breakpoints() {
     unsigned removed = 0, unarmed = 0;
     for (auto it = breakpoints_.begin(); it != breakpoints_.end();) {
         auto current = it++;
-        if (current->second.enabled) {
+        if (current->second.enabled && mapped(current->first)) {
             try { write_byte(current->first, current->second.original); }
             catch (const std::exception&) { ++unarmed; }
         }
@@ -591,16 +632,28 @@ void Debugger::manage_breakpoint(const std::string& command, unsigned id) {
     auto found = std::find_if(breakpoints_.begin(), breakpoints_.end(),
                              [id](const auto& item) { return item.second.id == id; });
     if (found == breakpoints_.end()) throw std::runtime_error("breakpoint id not found");
+    const Address address = found->first;
     auto& bp = found->second;
     if (command == "delete" || command == "disable") {
-        if (bp.enabled) write_byte(found->first, bp.original);
+        // The mapping may have been unmapped by the target (dlclose, munmap);
+        // there is no INT3 left to restore, but the metadata must stay
+        // manageable instead of trapping the user forever.
+        const bool present = mapped(address);
+        if (bp.enabled && present) write_byte(address, bp.original);
         if (command == "delete") breakpoints_.erase(found);
         else bp.enabled = false;
-    } else if (!bp.enabled) {
+        std::cout << "** breakpoint " << id << ": " << command << ".\n";
+        if (!present) {
+            std::cout << "** note: 0x" << std::hex << address << std::dec
+                      << " is no longer mapped; only debugger metadata was updated.\n";
+        }
+        return;
+    }
+    if (!bp.enabled) {
         // Both permissions and bytes may change while the breakpoint is disabled.
-        require_executable(found->first);
-        auto original = read_memory(found->first, 1)[0];
-        write_byte(found->first, 0xcc);
+        require_executable(address);
+        auto original = read_memory(address, 1)[0];
+        write_byte(address, 0xcc);
         bp.original = original;
         bp.enabled = true;
     }

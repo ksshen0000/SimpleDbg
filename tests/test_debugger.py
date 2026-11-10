@@ -375,13 +375,19 @@ second:
 
     def test_signal_delivery_and_arguments(self):
         s = self.session("pie", "signal")
-        self.assertIn("stopped by signal 10", s.command("cont"))
+        output = s.command("cont")
+        self.assertIn("stopped by signal 10", output)
+        self.assertIn("(SIGUSR1)", output)
         self.assertIn("exited with status 8", s.command("cont"))
 
     def test_target_sigtrap_is_forwarded(self):
         s = self.session("pie", "trap")
-        self.assertIn("stopped by signal 5", s.command("cont"))
-        self.assertIn("terminated by signal 5", s.command("cont"))
+        output = s.command("cont")
+        self.assertIn("stopped by signal 5", output)
+        self.assertIn("(SIGTRAP)", output)
+        output = s.command("cont")
+        self.assertIn("terminated by signal 5", output)
+        self.assertIn("(SIGTRAP)", output)
 
     def test_symbol_breakpoints_all_program_types(self):
         for name in self.available(("pie", "dynamic", "static", "static-pie")):
@@ -479,7 +485,9 @@ second:
 
     def test_sigsegv_keeps_faulting_rip(self):
         s = self.session("pie", "crash")
-        self.assertIn("stopped by signal 11", s.command("cont"))
+        output = s.command("cont")
+        self.assertIn("stopped by signal 11", output)
+        self.assertIn("(SIGSEGV)", output)
         before = re.search(r"rip = 0x([0-9a-f]+)", s.command("regs rip"))[1]
         # Observing state must neither rewind RIP nor consume the pending signal.
         self.assertIn(before, s.command("regs rip"))
