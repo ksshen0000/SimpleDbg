@@ -104,9 +104,9 @@ void print_help(const std::string& topic) {
             "cont, si, next/ni (instruction step-over), finish, bt (frame pointers)\n"
             "where, list, step (source line; requires binutils and DWARF)\n"
             "regs [register|fp], x <address|symbol|$register> [decimal byte count]\n"
-            "set $register = <unsigned integer>; set mem <address|symbol> <hexbytes>\n"
+            "set $register = <unsigned integer>; set mem <address|symbol> <hexbytes>; set disasm on|off\n"
             "watch <address|symbol> [1|2|4|8], unwatch <id>, catch syscall [all|off|number]\n"
-            "info breakpoints/watchpoints/proc/sharedlibrary; info proc mappings\n"
+            "info breakpoints/watchpoints/registers/proc/sharedlibrary; info proc mappings\n"
             "delete/enable/disable <breakpoint id>, delete all, anchor, timetravel, quit\n"
             "Symbol breakpoints require code; raw addresses require an instruction boundary.\n"
             "Ctrl-C pauses a running target. Threads/fork/exec end the session safely.\n"
@@ -128,11 +128,14 @@ void print_help(const std::string& topic) {
         {"regs", "regs [register|fp]\nShow general registers, or FP/SIMD state for fp/xmm/ymm/st/mxcsr.\n"},
         {"x", "x <address|symbol|$register> [decimal byte count]\nExamine 1..4096 bytes, default 16.\n"},
         {"set", "set $register = <unsigned integer>\nset mem <address|symbol> <hexbytes>\n"
-                "Registers are decimal or 0x-hex; memory writes use raw hexadecimal bytes without 0x.\n"},
+                "set disasm on|off\n"
+                "Registers are decimal or 0x-hex; memory writes use raw hexadecimal bytes without 0x.\n"
+                "set disasm controls the automatic 5-instruction dump after each command.\n"},
         {"watch", "watch <address|symbol> [1|2|4|8]\nSet a hardware write watchpoint (four slots, aligned address).\n"},
         {"unwatch", "unwatch <watchpoint id>\nRemove a hardware watchpoint.\n"},
         {"catch", "catch syscall [all|off|decimal number]\nCapture syscall entries and exits (Linux 5.3+).\n"},
-        {"info", "info breakpoints | watchpoints | proc [mappings] | sharedlibrary\nShow debugger and target state.\n"},
+        {"info", "info breakpoints | watchpoints | registers [name] | proc [mappings] | sharedlibrary\n"
+                 "Show debugger and target state.\n"},
         {"delete", "delete <id> | delete all (alias del)\nRemove software breakpoints and restore their original bytes.\n"},
         {"enable", "enable <id>\nRevalidate permissions and re-arm a disabled breakpoint.\n"},
         {"disable", "disable <id>\nRestore the original byte but keep the breakpoint metadata.\n"},
@@ -527,7 +530,14 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                 if (args.size() != 2) throw std::runtime_error("usage: break <symbol or hex runtime address>");
                 add_breakpoint(resolve_address(args[1], true));
             } else if (command == "set") {
-                set_value(args);
+                if (args.size() == 3 && args[1] == "disasm") {
+                    if (args[2] != "on" && args[2] != "off")
+                        throw std::runtime_error("usage: set disasm on|off");
+                    disasm_ = args[2] == "on";
+                    std::cout << "** disassembly after commands: " << (disasm_ ? "on" : "off") << ".\n";
+                } else {
+                    set_value(args);
+                }
             } else if (command == "watch" || command == "unwatch") {
                 watch_command(args);
             } else if (command == "catch") {
@@ -575,7 +585,7 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                 else if (command == "timetravel") timetravel();
                 else throw std::runtime_error("unknown command; type help");
             }
-            if (alive_) disassemble();
+            if (alive_ && disasm_) disassemble();
         } catch (const std::exception& error) {
             std::cerr << "** error: " << error.what() << '\n';
         }
@@ -778,6 +788,10 @@ Address Debugger::resolve_symbol(const std::string& request, bool code) {
 }
 
 void Debugger::process_info(const std::vector<std::string>& args) {
+    if (args.size() >= 2 && args.size() <= 3 && args[1] == "registers") {
+        show_registers(args.size() == 3 ? args[2] : "");
+        return;
+    }
     if (args == std::vector<std::string>{"info", "breakpoints"}) { list_breakpoints(); return; }
     if (args == std::vector<std::string>{"info", "watchpoints"}) {
         for (const auto& [slot, watch] : watches_)

@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；78 项测试
-  （集成 49、工作流 22、故障注入 7）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；79 项测试
+  （集成 50、工作流 22、故障注入 7）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -116,3 +116,10 @@ python3 tests/bench.py --sdb build-release/sdb
 - `sdb --help` / `-h` 输出用法并以 0 退出；`break *0x地址` 支持 GDB 风格前缀。
 - 新增集成测试覆盖 `*` 地址语法与 `--help`，源码流程增加指定行与越界断言；
   测试总数 78。
+
+### 批次 5：反汇编开关与寄存器入口
+
+- `set disasm on|off` 控制每条命令后的自动反汇编（默认开），便于安静地查看状态或执行
+  脚本化工作流；非法参数报用法错误。
+- `info registers [名字]` 作为 `regs` 的等价入口，方便 GDB 习惯。
+- 新增集成测试覆盖开关的前后行为与非法参数；测试总数 79。

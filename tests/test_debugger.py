@@ -290,6 +290,15 @@ second:
                     self.assertIn(f"hit a breakpoint at 0x{address:x}", s.command("cont"))
                 self.assertIn("exited with status 3", s.command("cont"))
 
+    def test_set_disasm_and_info_registers(self):
+        s = self.session()
+        self.assertIn("disassembly after commands: off", s.command("set disasm off"))
+        self.assertIsNone(re.search(r"^  0x[0-9a-f]+: ", s.command("regs"), re.M))
+        self.assertIn("disassembly after commands: on", s.command("set disasm on"))
+        self.assertIsNotNone(re.search(r"^  0x[0-9a-f]+: ", s.command("regs"), re.M))
+        self.assertIn("error:", s.command("set disasm maybe"))
+        self.assertIn("rax = 0x", s.command("info registers rax"))
+
     def test_star_address_syntax(self):
         s = self.session()
         address = self.address(s, "pie", "tick")

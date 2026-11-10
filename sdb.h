@@ -43,6 +43,7 @@ private:
     bool alive_ = false;
     int signal_ = 0;
     bool paused_ = false;
+    bool disasm_ = true;
     csh capstone_ = 0;
     struct Breakpoint {
         unsigned id;

@@ -17,7 +17,7 @@ ctest --test-dir build --output-on-failure
 静态测试目标还需要静态 C 库（Debian/Ubuntu 通常由 `libc6-dev` 提供，Fedora/RHEL 为
 `glibc-static`）。缺少时 `static`/`static-pie` 用例会跳过并打印原因，其余测试照常运行。
 测试需要允许父进程跟踪自己的子进程。容器可能需要相应的 ptrace/seccomp 配置。
-三个测试组（49/22/7 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
+三个测试组（50/22/7 项）覆盖核心行为、调试工作流，以及真实 ptrace 错误注入后的事务恢复。
 错误注入只链接到测试程序 `sdb-fault`，生产程序 `sdb` 不包含注入入口。
 
 仅构建 Release 程序，不构建测试工具：
@@ -60,10 +60,12 @@ PID、入口地址和加载偏移。反汇编直接读取运行内存，不要�
 | `x 地址/符号/$寄存器 [字节数]` | 十六进制查看内存，默认 16 字节，范围 1–4096 |
 | `set $rdi = 40` | 修改通用寄存器，整数为十进制或 `0x` 十六进制 |
 | `set mem counter 2a000000` | 按原始字节修改内存（示例为小端 int 42） |
+| `set disasm on|off` | 开关每条命令后的 5 条自动反汇编（默认开） |
 | `watch counter [大小]` | 硬件写监视点，默认 4 字节，大小支持 1/2/4/8 |
 | `unwatch 编号` | 删除硬件监视点 |
 | `catch syscall [all/off/编号]` | 捕获 syscall 入口和出口；编号为十进制 Linux x86-64 syscall 号 |
 | `info breakpoints` / `info watchpoints` | 查看断点 / 监视点 |
+| `info registers [名字]` | 与 `regs` 相同的寄存器查看入口 |
 | `info proc` | PID、PPID、可执行路径、入口和加载偏移 |
 | `info proc mappings` / `info sharedlibrary` | 映射 / 已加载 ELF 对象、加载偏移及符号状态 |
 | `delete 编号` / `delete all` | 删除软件断点（all 删除全部并恢复原始字节） |
