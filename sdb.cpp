@@ -1,382 +1,400 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/types.h>
+#include "sdb.h"
+
 #include <sys/wait.h>
-#include <sys/ptrace.h>
-#include <sys/user.h>
-#include <assert.h>
-#include <capstone/capstone.h>
-#include <map>
-#include <elf.h>
-#include <string>
+#include <unistd.h>
+#include <signal.h>
+
+#include <algorithm>
+#include <cerrno>
+#include <cstdio>
 #include <cstring>
-#include <vector>
-#include <set>
-#define BUFFSIZE 1024
-static std::map<long long, cs_insn> instructions;
-std::set<unsigned long long > breakpoints;
-class range{
-    public:
-    unsigned long long start;
-    unsigned long long end;
-};
-class minfo{
-    public:
-    uint8_t *start;
-    size_t size;
-};
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <sstream>
+#include <stdexcept>
+#include <utility>
 
-class snapshot{
-    public:
-    int used;
-    struct user_regs_struct ss_regs;
-    std::vector<minfo> minfos;
-    std::vector<range> child_infos;
-};
-snapshot anchor_snapshot;
+static_assert(sizeof(long) == 8, "SimpleDbg requires Linux x86-64");
 
-void errquit(const char *msg) {
-	perror(msg);
-	exit(-1);
+namespace {
+std::runtime_error system_error(const std::string& action) {
+    return std::runtime_error(action + ": " + std::strerror(errno));
 }
-void disassemble_code_sections( Elf64_Shdr *section_header_table, int num_sections, unsigned char *buffer) {
-    // Initialize Capstone
-    csh handle;
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
-        printf("Failed to initialize Capstone\n");
+uint64_t parse_number(const std::string& value, int base) {
+    if (value.empty() || value[0] == '-' || value[0] == '+')
+        throw std::runtime_error("invalid number: " + value);
+    size_t consumed = 0;
+    uint64_t number = std::stoull(value, &consumed, base);
+    if (consumed != value.size()) throw std::runtime_error("invalid number: " + value);
+    return number;
+}
+} // namespace
+
+long Debugger::trace(enum __ptrace_request request, Address address, void* data) {
+    errno = 0;
+    long value = ptrace(request, child_, reinterpret_cast<void*>(address), data);
+    if (value == -1 && errno) throw system_error("ptrace");
+    return value;
+}
+
+user_regs_struct Debugger::registers() {
+    user_regs_struct regs{};
+    trace(PTRACE_GETREGS, 0, &regs);
+    return regs;
+}
+
+void Debugger::write_byte(Address address, uint8_t byte) {
+    Address aligned = address & ~(sizeof(long) - 1);
+    unsigned long word = static_cast<unsigned long>(trace(PTRACE_PEEKDATA, aligned));
+    auto* bytes = reinterpret_cast<uint8_t*>(&word);
+    bytes[address - aligned] = byte;
+    trace(PTRACE_POKEDATA, aligned, reinterpret_cast<void*>(word));
+}
+
+std::vector<uint8_t> Debugger::read_memory(Address address, size_t size, bool partial) {
+    if (size && address > std::numeric_limits<Address>::max() - (size - 1))
+        throw std::runtime_error("memory address range overflows");
+    std::vector<uint8_t> bytes;
+    bytes.reserve(size);
+    while (bytes.size() < size) {
+        Address current = address + bytes.size();
+        Address aligned = current & ~(sizeof(long) - 1);
+        errno = 0;
+        long word = ptrace(PTRACE_PEEKDATA, child_, reinterpret_cast<void*>(aligned), nullptr);
+        if (word == -1 && errno) {
+            if (partial) break;
+            throw system_error("read memory");
+        }
+        size_t offset = current - aligned;
+        size_t count = std::min(sizeof(long) - offset, size - bytes.size());
+        auto* data = reinterpret_cast<uint8_t*>(&word);
+        bytes.insert(bytes.end(), data + offset, data + offset + count);
+    }
+    return bytes;
+}
+
+std::vector<Debugger::Mapping> Debugger::writable_maps() {
+    std::ifstream file("/proc/" + std::to_string(child_) + "/maps");
+    if (!file) throw std::runtime_error("cannot read process mappings");
+    std::vector<Mapping> maps;
+    std::string line;
+    while (std::getline(file, line)) {
+        std::istringstream input(line);
+        std::string range, permissions;
+        input >> range >> permissions;
+        if (permissions.size() != 4 || permissions[1] != 'w' || permissions[3] != 'p') continue;
+        size_t dash = range.find('-');
+        maps.push_back({std::stoull(range.substr(0, dash), nullptr, 16),
+                        std::stoull(range.substr(dash + 1), nullptr, 16), permissions});
+    }
+    return maps;
+}
+
+bool Debugger::wait_stop(bool stepping) {
+    int status;
+    pid_t result;
+    do { result = waitpid(child_, &status, 0); } while (result < 0 && errno == EINTR);
+    if (result < 0) throw system_error("waitpid");
+    if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        alive_ = false;
+        if (WIFEXITED(status)) std::cout << "** target exited with status " << WEXITSTATUS(status) << ".\n";
+        else std::cout << "** target terminated by signal " << WTERMSIG(status) << ".\n";
+        return false;
+    }
+    if (!WIFSTOPPED(status)) throw std::runtime_error("unexpected process state");
+    signal_ = WSTOPSIG(status);
+    if (signal_ == SIGTRAP) {
+        siginfo_t info{};
+        trace(PTRACE_GETSIGINFO, 0, &info);
+        auto regs = registers();
+        auto bp = breakpoints_.find(regs.rip - 1);
+        if (!stepping && (info.si_code == TRAP_BRKPT || info.si_code == SI_KERNEL) && bp != breakpoints_.end() && bp->second.enabled) {
+            regs.rip--;
+            trace(PTRACE_SETREGS, 0, &regs);
+            write_byte(regs.rip, bp->second.original);
+            std::cout << "** hit a breakpoint at 0x" << std::hex << regs.rip << std::dec << ".\n";
+            signal_ = 0;
+        } else if (stepping && info.si_code == TRAP_TRACE) {
+            signal_ = 0;
+        }
+    }
+    if (signal_) std::cout << "** stopped by signal " << signal_ << " (forwarded on resume).\n";
+    return true;
+}
+
+bool Debugger::single_step() {
+    Address rip = registers().rip;
+    auto bp = breakpoints_.find(rip);
+    if (bp != breakpoints_.end() && bp->second.enabled) write_byte(rip, bp->second.original);
+    int delivered = signal_;
+    signal_ = 0;
+    trace(PTRACE_SINGLESTEP, 0, reinterpret_cast<void*>(static_cast<intptr_t>(delivered)));
+    bool stopped = wait_stop(true);
+    if (stopped && bp != breakpoints_.end() && bp->second.enabled) write_byte(rip, 0xcc);
+    return stopped;
+}
+
+void Debugger::disassemble() {
+    Address rip = registers().rip;
+    auto bytes = read_memory(rip, 80, true);
+    for (const auto& [address, breakpoint] : breakpoints_) {
+        if (breakpoint.enabled && address >= rip && address - rip < bytes.size()) bytes[address - rip] = breakpoint.original;
+    }
+    cs_insn* insn = nullptr;
+    size_t count = cs_disasm(capstone_, bytes.data(), bytes.size(), rip, 5, &insn);
+    if (!count) std::cout << "** cannot disassemble at 0x" << std::hex << rip << std::dec << ".\n";
+    for (size_t i = 0; i < count; ++i) {
+        std::cout << "  0x" << std::hex << insn[i].address << std::dec << ": "
+                  << insn[i].mnemonic << " " << insn[i].op_str << '\n';
+    }
+    cs_free(insn, count);
+}
+
+void Debugger::add_breakpoint(Address address) {
+    if (breakpoints_.count(address)) {
+        std::cout << "** breakpoint already exists.\n";
         return;
     }
+    auto original = read_memory(address, 1)[0];
+    write_byte(address, 0xcc);
+    breakpoints_.emplace(address, Breakpoint{next_breakpoint_id_++, original});
+    std::cout << "** set a breakpoint at 0x" << std::hex << address << std::dec << " (id " << breakpoints_.at(address).id << ").\n";
+}
 
-    // Iterate over all code sections
-    printf("Disassembly of code sections:\n");
-    for (int i = 0; i < num_sections; i++) {
-        Elf64_Shdr *section_header = &section_header_table[i];
-        if (section_header->sh_type == SHT_PROGBITS &&
-            (section_header->sh_flags & (SHF_EXECINSTR ))) {
-            Elf64_Addr section_address = section_header->sh_addr;
-            Elf64_Xword section_size = section_header->sh_size;
-            printf("section size: %lx\n",section_size);
+void Debugger::anchor() {
+    Snapshot next;
+    next.regs = registers();
+    next.maps = writable_maps();
+    next.signal = signal_;
+    for (const auto& map : next.maps) {
+        auto bytes = read_memory(map.start, map.end - map.start);
+        for (const auto& [address, breakpoint] : breakpoints_) {
+            if (breakpoint.enabled && address >= map.start && address < map.end) bytes[address - map.start] = breakpoint.original;
+        }
+        next.memory.push_back(std::move(bytes));
+    }
+    next.valid = true;
+    snapshot_ = std::move(next);
+    std::cout << "** dropped an anchor.\n";
+}
 
-            // Disassemble the code section
-            cs_insn *insn;
-            size_t count = cs_disasm(handle, buffer + section_header->sh_offset, section_size, section_address, 0, &insn);
-            if (count > 0) {
-                for (size_t j = 0; j < count; j++) {
-                    // printf("0x%"PRIx64":\t%s\t\t%s\n", insn[j].address, insn[j].mnemonic, insn[j].op_str);
-                    instructions[insn[j].address] = insn[j];
-                }
+void Debugger::timetravel() {
+    if (!snapshot_.valid) throw std::runtime_error("no anchor has been created");
+    if (writable_maps() != snapshot_.maps) throw std::runtime_error("memory mappings changed; cannot restore anchor");
+    // Remove traps before restoring memory, then reapply the current breakpoint set.
+    for (const auto& [address, breakpoint] : breakpoints_) {
+        if (breakpoint.enabled) write_byte(address, breakpoint.original);
+    }
+    for (size_t i = 0; i < snapshot_.maps.size(); ++i) {
+        const auto& bytes = snapshot_.memory[i];
+        for (size_t offset = 0; offset < bytes.size(); offset += sizeof(long)) {
+            long word;
+            std::memcpy(&word, bytes.data() + offset, sizeof(word));
+            trace(PTRACE_POKEDATA, snapshot_.maps[i].start + offset, reinterpret_cast<void*>(word));
+        }
+    }
+    for (auto& [address, breakpoint] : breakpoints_) {
+        breakpoint.original = read_memory(address, 1)[0];
+        if (breakpoint.enabled) write_byte(address, 0xcc);
+    }
+    trace(PTRACE_SETREGS, 0, &snapshot_.regs);
+    signal_ = snapshot_.signal;
+    std::cout << "** go back to the anchor point.\n";
+}
 
-                // Clean up Capstone resources
-                cs_free(insn, count);
+Debugger::~Debugger() {
+    if (alive_) {
+        kill(child_, SIGKILL);
+        while (waitpid(child_, nullptr, 0) < 0 && errno == EINTR) {}
+    }
+    if (capstone_) cs_close(&capstone_);
+}
+
+void Debugger::run(char** argv, const Elf64_Ehdr& elf) {
+    if (cs_open(CS_ARCH_X86, CS_MODE_64, &capstone_) != CS_ERR_OK)
+        throw std::runtime_error("cannot initialize Capstone");
+    symbols_.load(argv[0]);
+    child_ = fork();
+    if (child_ < 0) throw system_error("fork");
+    if (!child_) {
+        if (ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) < 0) { perror("ptrace"); _exit(126); }
+        execv(argv[0], argv);
+        perror("execv");
+        _exit(127);
+    }
+    alive_ = true;
+    // The initial exec trap belongs to the debugger, not the target.
+    int status;
+    pid_t waited;
+    do { waited = waitpid(child_, &status, 0); } while (waited < 0 && errno == EINTR);
+    if (waited < 0) throw system_error("waitpid");
+    if (!WIFSTOPPED(status)) { alive_ = false; throw std::runtime_error("target failed to start"); }
+    trace(PTRACE_SETOPTIONS, 0, reinterpret_cast<void*>(PTRACE_O_EXITKILL));
+    Address entry = 0;
+    std::ifstream auxv("/proc/" + std::to_string(child_) + "/auxv", std::ios::binary);
+    Elf64_auxv_t aux{};
+    while (auxv.read(reinterpret_cast<char*>(&aux), sizeof(aux))) {
+        if (aux.a_type == AT_ENTRY) { entry = aux.a_un.a_val; break; }
+    }
+    if (!entry) throw std::runtime_error("cannot locate runtime entry point");
+    if (registers().rip != entry) {
+        add_breakpoint(entry);
+        trace(PTRACE_CONT);
+        if (!wait_stop()) return;
+        if (registers().rip != entry || signal_) throw std::runtime_error("target stopped before reaching entry point");
+        breakpoints_.erase(entry);
+    }
+    next_breakpoint_id_ = 1;
+    load_bias_ = entry - elf.e_entry;
+    std::cout << "** program '" << argv[0] << "' loaded. entry point 0x" << std::hex << entry
+              << "; load bias 0x" << entry - elf.e_entry << std::dec << ".\n";
+    disassemble();
+    std::string line;
+    while (alive_ && (std::cout << "(sdb) " << std::flush, std::getline(std::cin, line))) {
+        std::istringstream input(line);
+        std::vector<std::string> args;
+        std::string token;
+        while (input >> token) args.push_back(token);
+        if (args.empty()) continue;
+        try {
+            const auto& command = args[0];
+            if (command == "break") {
+                if (args.size() != 2) throw std::runtime_error("usage: break <symbol or hex runtime address>");
+                add_breakpoint(resolve_address(args[1]));
+            } else if (command == "regs") {
+                if (args.size() > 2) throw std::runtime_error("usage: regs [register]");
+                show_registers(args.size() == 2 ? args[1] : "");
+            } else if (command == "x") {
+                if (args.size() < 2 || args.size() > 3) throw std::runtime_error("usage: x <address|symbol|$register> [decimal byte count]");
+                uint64_t count = args.size() == 3 ? parse_number(args[2], 10) : 16;
+                if (!count || count > 4096) throw std::runtime_error("byte count must be 1..4096");
+                examine_memory(resolve_address(args[1]), count);
+            } else if (command == "delete" || command == "enable" || command == "disable") {
+                if (args.size() != 2) throw std::runtime_error("usage: " + command + " <breakpoint id>");
+                uint64_t id = parse_number(args[1], 10);
+                if (!id || id > std::numeric_limits<unsigned>::max()) throw std::runtime_error("invalid breakpoint id");
+                manage_breakpoint(command, static_cast<unsigned>(id));
+            } else if (command == "info") {
+                if (args.size() != 2 || args[1] != "breakpoints") throw std::runtime_error("usage: info breakpoints");
+                list_breakpoints();
             } else {
-                printf("Failed to disassemble section at address 0x%lx\n", section_address);
+                if (args.size() != 1) throw std::runtime_error("unexpected command arguments");
+                if (command == "quit" || command == "q") break;
+                if (command == "si") single_step();
+                else if (command == "cont") {
+                    if (enabled_breakpoint(registers().rip)) {
+                        if (!single_step()) continue;
+                        if (signal_) { disassemble(); continue; }
+                    }
+                    trace(PTRACE_CONT, 0, reinterpret_cast<void*>(static_cast<intptr_t>(signal_)));
+                    signal_ = 0;
+                    wait_stop();
+                } else if (command == "anchor") anchor();
+                else if (command == "timetravel") timetravel();
+                else if (command == "help") {
+                    std::cout << "break <symbol|hex runtime address>, info breakpoints, delete/enable/disable <id>, "
+                                 "regs [register], x <address|symbol|$register> [byte count], cont, si, anchor, timetravel, quit\n";
+                } else throw std::runtime_error("unknown command; type help");
             }
-        }
-    }
-
-    // Clean up Capstone
-    cs_close(&handle);
-}
-
-int readelf_disassemble(const char * filename){
-    // Open the ELF file
-    FILE *file = fopen(filename, "rb");
-    if (!file) {
-        printf("Failed to open file: %s\n", filename);
-        return 1;
-    }
-
-    // Read the ELF header
-    Elf64_Ehdr elf_header;
-    fread(&elf_header, sizeof(Elf64_Ehdr), 1, file);
-
-    // Read the section header table
-    int num_sections = elf_header.e_shnum;
-    int section_header_size = elf_header.e_shentsize;
-    Elf64_Off section_header_offset = elf_header.e_shoff;
-    fseek(file, section_header_offset, SEEK_SET);
-
-    Elf64_Shdr *section_header_table = (Elf64_Shdr *)malloc(section_header_size * num_sections);
-    fread(section_header_table, section_header_size, num_sections, file);
-
-    // Find the size of the file
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    // Allocate memory to hold the entire file
-    unsigned char *buffer = (unsigned char *)malloc(file_size);
-    if (!buffer) {
-        printf("Memory allocation failed\n");
-        fclose(file);
-        free(section_header_table);
-        return 1;
-    }
-
-    // Read the entire file into memory
-    fread(buffer, file_size, 1, file);
-
-    // Disassemble all code sections using Capstone
-    disassemble_code_sections( section_header_table, num_sections, buffer);
-
-    // Clean up
-    free(buffer);
-    free(section_header_table);
-    fclose(file);
-
-    return 0;
-}
-void print_5_instr_from_addr(unsigned long long addr){
-    std::map<long long, cs_insn>::iterator iter= instructions.find(addr);
-    for (int i=0;i<5;i++){
-        if (iter==instructions.end()){
-            printf("** the address is out of the range of the text section.\n");
-            break;
-        }
-        printf("%12llx: ", iter->first);
-        int j ;
-        for (j =0 ;j< iter->second.size;j++){
-            printf("%02x ",iter->second.bytes[j]);
-        }
-        for (;j<12;j++){
-            printf("   ");
-        }
-        printf("\t\t%s\t%s\t\n", iter->second.mnemonic,iter->second.op_str);
-        iter++;
-    }
-}
-int get_input_cmd(std::vector<std::string>& cmd){
-    printf("(sdb) ");
-    cmd.clear();
-    char line[1024]={0};
-    fgets(line,1024,stdin);
-    char *token = strtok(line," ");
-    while(token != NULL){
-        if (token[strlen(token)-1]=='\n'){
-            token[strlen(token)-1]=0;
-        }
-        cmd.insert(cmd.end(),std::string(token));
-        token = strtok(NULL, " ");
-    }
-    return 0;
-}
-
-void restore_instr(pid_t child, unsigned long long addr){
-    auto it = instructions.find(addr);
-    if(it==instructions.end()) return;
-    uint64_t originalData = ptrace(PTRACE_PEEKTEXT, child, addr, NULL);
-    uint64_t newData = (originalData & 0xFFFFFFFFFFFFFF00) |it->second.bytes[0];
-    // printf("%llx %llx\n",originalData,newData);
-    ptrace(PTRACE_POKETEXT, child, addr, newData); 
-}
-void cc_instr(pid_t child, unsigned long long addr){
-    auto it = instructions.find(addr);
-    if(it==instructions.end()) return;
-    uint64_t originalData = ptrace(PTRACE_PEEKTEXT, child, addr, NULL);
-    uint64_t newData = (originalData & 0xFFFFFFFFFFFFFF00) | 0xcc;
-    // printf("%llx %llx\n",originalData,newData);
-    ptrace(PTRACE_POKETEXT, child, addr, newData); 
-}
-void step(pid_t child , int* status){
-
-    struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, child, 0, &regs);
-    unsigned long long prev_rip= regs.rip;
-    restore_instr(child,regs.rip);
-
-    if(ptrace(PTRACE_SINGLESTEP, child, 0, 0) < 0) errquit("single step in si");
-    waitpid(child,status,0);
-    if(!WIFSTOPPED(*status)){
-        return;
-    }
-    ptrace(PTRACE_GETREGS, child, 0, &regs);
-    auto it = breakpoints.find(regs.rip);
-    if(it!=breakpoints.end()){
-        printf("** hit a breakpoint at 0x%llx.\n",regs.rip);
-    }
-
-    it = breakpoints.find(prev_rip);
-    if(it!=breakpoints.end()){
-        cc_instr(child,prev_rip);
-    }
-    print_5_instr_from_addr(regs.rip);
-}
-int setBreakpoint(pid_t child, unsigned long long addr){
-    auto it = instructions.find(addr);
-    if(it == instructions.end()) return -1;
-
-    breakpoints.insert(addr);
-    printf("** set a breakpoint at %p.\n",(void*)addr);
-    cc_instr(child,addr);
-    // originalData = ptrace(PTRACE_PEEKTEXT, child, addr, NULL);
-    // printf("%llx\n",originalData);
-    return 0;
-
-}
-void cont(pid_t child , int *status){
-    struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, child, 0, &regs);
-    unsigned long long prev_rip= regs.rip;
-    restore_instr(child,regs.rip);
-
-    if(ptrace(PTRACE_SINGLESTEP, child, 0, 0) < 0) errquit("single step in si");
-    waitpid(child,status,0);
-
-    ptrace(PTRACE_GETREGS, child, 0, &regs);
-    auto it = breakpoints.find(prev_rip);
-    if(it!=breakpoints.end()){
-        cc_instr(child,prev_rip);
-    }
-    ptrace(PTRACE_CONT, child, 0, 0);
-    waitpid(child,status,0);
-    if(WIFSTOPPED(*status)){
-        ptrace(PTRACE_GETREGS, child, 0, &regs);
-        it = breakpoints.find(regs.rip-1);
-        if(it !=breakpoints.end() ){
-            printf("** hit a breakpoint at 0x%llx.\n",regs.rip-1);
-        }
-        print_5_instr_from_addr(regs.rip-1);
-        regs.rip--;
-        ptrace(PTRACE_SETREGS,child,0,&regs);
-    }
-
-}
-void restore_snapshot(pid_t child,snapshot ss){
-    unsigned long data;
-    if(ptrace(PTRACE_SETREGS, child, 0, &ss.ss_regs)<0) errquit("snapshot register");
-    for(int i=0;i<ss.minfos.size();i++){
-        range& r = ss.child_infos[i];
-        minfo& m = ss.minfos[i];
-        for(uint64_t j=0;j<m.size;j+=8){
-            uint64_t *ptr =(uint64_t*)(m.start+j);
-            ptrace(PTRACE_POKEDATA,child,r.start+j,*ptr);
-        }
-    }
-
-}
-void create_snapshot_storage(snapshot& ss){
-    if(ss.used==1) return;
-    ss.used=1;
-    for (int i =0; i<ss.child_infos.size();i++){
-        minfo m;
-        m.size = ss.child_infos[i].end-ss.child_infos[i].start;
-        m.start = (uint8_t*)malloc(m.size);
-        ss.minfos.insert(ss.minfos.end(),m);
-    }
-}
-void delete_snapshot_storage(snapshot& ss){
-    if(ss.used==1){
-        for (int i =0; i<ss.minfos.size();i++){
-
-            free(ss.minfos[i].start);
-            ss.minfos[i].start=0;
-            ss.minfos[i].size =0;
-        }
-        ss.used =0;
-    }
-}
-void take_snapshot(pid_t child,const snapshot &ss){
-    uint64_t data;
-    if(ptrace(PTRACE_GETREGS, child, 0, &ss.ss_regs)<0) errquit("snapshot register");
-    for(int i=0;i<ss.child_infos.size();i++){
-        for(uint64_t j=0;j<ss.minfos[i].size;j+=8){
-            data = ptrace(PTRACE_PEEKDATA,child,ss.child_infos[i].start+j,NULL);
-            memcpy(ss.minfos[i].start+j,&data,8);
+            if (alive_) disassemble();
+        } catch (const std::exception& error) {
+            std::cerr << "** error: " << error.what() << '\n';
         }
     }
 }
-void anchor(pid_t child,int* status){
-    char filename[100]={0};
-    char c;
-    char buf[0x1000]={0};
-    std::vector<range>& store = anchor_snapshot.child_infos;
-    store.clear();
-    char permit[10]={0};
-    snprintf(filename,100,"/proc/%d/maps",child);
-    FILE* fp = fopen(filename,"r");
-    while(fgets(buf,0x1000,fp)){
-        range r;
-        sscanf(buf,"%llx %c %llx %s",&r.start,&c,&r.end,permit);
-        if(permit[1]=='w'){
-            // printf("%s",buf);
-            store.insert(store.end(),r);
-        }
-    }
-    delete_snapshot_storage(anchor_snapshot);
-    create_snapshot_storage(anchor_snapshot);
-    take_snapshot(child,anchor_snapshot);
 
-    printf("** dropped an anchor\n");
-
+bool Debugger::enabled_breakpoint(Address address) const {
+    auto bp = breakpoints_.find(address);
+    return bp != breakpoints_.end() && bp->second.enabled;
 }
-void timetravel(pid_t child){
-    restore_snapshot(child,anchor_snapshot);
-    printf("** go back to the anchor point\n");
-    struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, child, 0, &regs);
-    print_5_instr_from_addr(regs.rip);
-}
-int main(int argc, char *argv[])
-{
-    if(argc<2){
-        fprintf(stderr,"Usage: <%s> <command>", argv[0]);
-    }
-    readelf_disassemble(argv[1]);
-    pid_t child = 0;
-    if ((child = fork())<0) errquit("fork");
-    if (child ==0 ){
-        if(ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) errquit("ptrace");
-		execvp(argv[1], argv+1);
-		errquit("execvp");
-    }
-    else{
-        int status;
-        std::vector<std::string> cmd;
-        struct user_regs_struct regs;
-        anchor_snapshot.used=0;
-        setvbuf(stdin, nullptr, _IOLBF, 0);
-        if(waitpid(child,&status,0)<0) errquit("wait traceme");
-        assert(WIFSTOPPED(status));
-		ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_EXITKILL);
-        ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC);
-        
-        ptrace(PTRACE_GETREGS, child, 0, &regs);
-        uint64_t entry_point = regs.rip; // x86_64 架构的寄存器是 rip
-        
-        printf("** program './hello' loaded. entry point %lx\n", entry_point);
-        print_5_instr_from_addr(entry_point);
-        while(WIFSTOPPED(status)){
-            get_input_cmd(cmd);
-            if(cmd.size()==0){
-                break;
-            }
-            if(cmd[0].compare("si")==0){
-                step(child,&status);
-            }
-            else if(cmd[0].compare("break")==0){
-                unsigned long long break_addr = std::stol(cmd[1], nullptr, 16);
-                setBreakpoint(child,break_addr);
 
-            }
-            else if(cmd[0].compare("cont")==0){
-                cont(child,&status);
-            }
-            else if(cmd[0].compare("anchor")==0){
-                anchor(child,&status);
-            }
-            else if(cmd[0].compare("timetravel")==0){
-                timetravel(child);
-            }
-            else{
-                printf("command not found\n");
-            }
-        }
-        // ptrace(PTRACE_CONT, child, 0, 0);
-        // waitpid(child, &status, 0);
-        if(WIFEXITED(status)){
-            printf("** the target program terminated.\n");
-        }
-        
+void Debugger::list_breakpoints() const {
+    std::cout << "ID  State     Address\n";
+    if (breakpoints_.empty()) std::cout << "** no breakpoints.\n";
+    for (const auto& [address, bp] : breakpoints_) {
+        std::cout << bp.id << "  " << (bp.enabled ? "enabled " : "disabled")
+                  << "  0x" << std::hex << address << std::dec << '\n';
     }
+}
+
+void Debugger::manage_breakpoint(const std::string& command, unsigned id) {
+    auto found = std::find_if(breakpoints_.begin(), breakpoints_.end(),
+                             [id](const auto& item) { return item.second.id == id; });
+    if (found == breakpoints_.end()) throw std::runtime_error("breakpoint id not found");
+    auto& bp = found->second;
+    if (command == "delete" || command == "disable") {
+        if (bp.enabled) write_byte(found->first, bp.original);
+        if (command == "delete") breakpoints_.erase(found);
+        else bp.enabled = false;
+    } else if (!bp.enabled) {
+        // Memory may have changed while the breakpoint was disabled.
+        bp.original = read_memory(found->first, 1)[0];
+        write_byte(found->first, 0xcc);
+        bp.enabled = true;
+    }
+    std::cout << "** breakpoint " << id << ": " << command << ".\n";
+}
+
+namespace {
+std::map<std::string, Address> register_values(const user_regs_struct& r) {
+    return {{"rax", r.rax}, {"rbx", r.rbx}, {"rcx", r.rcx}, {"rdx", r.rdx},
+            {"rsi", r.rsi}, {"rdi", r.rdi}, {"rbp", r.rbp}, {"rsp", r.rsp},
+            {"r8", r.r8}, {"r9", r.r9}, {"r10", r.r10}, {"r11", r.r11},
+            {"r12", r.r12}, {"r13", r.r13}, {"r14", r.r14}, {"r15", r.r15},
+            {"rip", r.rip}, {"eflags", r.eflags}, {"orig_rax", r.orig_rax},
+            {"cs", r.cs}, {"ss", r.ss}, {"ds", r.ds}, {"es", r.es},
+            {"fs", r.fs}, {"gs", r.gs}, {"fs_base", r.fs_base}, {"gs_base", r.gs_base}};
+}
+}
+
+Address Debugger::resolve_address(const std::string& value) {
+    if (!value.empty() && value[0] == '$') {
+        auto values = register_values(registers());
+        auto found = values.find(value.substr(1));
+        if (found == values.end()) throw std::runtime_error("unknown register: " + value);
+        return found->second;
+    }
+    if (symbols_.contains(value)) {
+        Address offset = symbols_.resolve(value);
+        if (offset > std::numeric_limits<Address>::max() - load_bias_)
+            throw std::runtime_error("symbol address overflow");
+        return offset + load_bias_;
+    }
+    bool hex = !value.empty() && value.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
+    if (hex || value.rfind("0x", 0) == 0 || value.rfind("0X", 0) == 0)
+        return parse_number(value, 16);
+    throw std::runtime_error("symbol not found: " + value + "; use a hex runtime address for stripped binaries");
+}
+
+void Debugger::show_registers(const std::string& name) {
+    auto values = register_values(registers());
+    auto print = [](const std::string& key, Address value) {
+        std::cout << key << " = 0x" << std::hex << std::setw(16) << std::setfill('0')
+                  << value << std::setfill(' ') << std::dec << '\n';
+    };
+    if (!name.empty()) {
+        std::string key = name[0] == '$' ? name.substr(1) : name;
+        auto found = values.find(key);
+        if (found == values.end()) throw std::runtime_error("unknown register: " + name);
+        print(found->first, found->second);
+    } else {
+        for (const auto& [key, value] : values) print(key, value);
+    }
+}
+
+void Debugger::examine_memory(Address address, size_t count) {
+    auto bytes = read_memory(address, count);
+    // Show the target's logical bytes rather than debugger-inserted INT3 traps.
+    for (const auto& [bp_address, bp] : breakpoints_) {
+        if (bp.enabled && bp_address >= address && bp_address - address < count)
+            bytes[bp_address - address] = bp.original;
+    }
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        if (i % 16 == 0) std::cout << "0x" << std::hex << address + i << ":";
+        std::cout << " " << std::hex << std::setw(2) << std::setfill('0') << unsigned(bytes[i]);
+        if (i % 16 == 15 || i + 1 == bytes.size()) std::cout << '\n';
+    }
+    std::cout << std::setfill(' ') << std::dec;
 }
