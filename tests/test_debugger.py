@@ -299,6 +299,16 @@ second:
         self.assertIn("error:", s.command("set disasm maybe"))
         self.assertIn("rax = 0x", s.command("info registers rax"))
 
+    def test_enable_disable_all(self):
+        s = self.session()
+        s.command("break tick")
+        self.assertIn("disabled 1", s.command("disable all"))
+        self.assertNotIn("enabled", s.command("info breakpoints"))
+        self.assertIn("enabled 1", s.command("enable all"))
+        for _ in range(3):
+            self.assertIn("hit a breakpoint", s.command("cont"))
+        self.assertIn("exited with status 3", s.command("cont"))
+
     def test_examine_string(self):
         s = self.session("bugs")
         output = s.command("x/s msg")

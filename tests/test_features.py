@@ -226,6 +226,16 @@ int main(void) {
         self.assertIn("set watchpoint 1 (write)", s.command("watch counter 4"))
         self.assertIn("exited with status 5", s.command("cont"))
 
+    def test_unwatch_all(self):
+        s = self.session()
+        address = self.address(s, "bytes")
+        self.assertIn("set watchpoint 1", s.command(f"watch {address:x} 1"))
+        self.assertIn("set watchpoint 2", s.command(f"watch {address+1:x} 1"))
+        self.assertIn("removed 2", s.command("unwatch all"))
+        self.assertIn("no watchpoints", s.command("info watchpoints"))
+        self.assertIn("removed 0", s.command("unwatch all"))
+        self.assertIn("exited with status 1", s.command("cont"))
+
     def test_watchpoint_resource_limits(self):
         s = self.session()
         address = self.address(s, "bytes")

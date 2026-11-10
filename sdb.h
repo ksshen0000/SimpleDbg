@@ -126,6 +126,7 @@ private:
     void list_breakpoints() const;
     void manage_breakpoint(const std::string& command, unsigned id);
     void delete_all_breakpoints();
+    void set_all_breakpoints(bool enable);
     std::string symbol_name(Address address) const;
     std::string source_name(Address address) const;
     bool mapped(Address address) const;

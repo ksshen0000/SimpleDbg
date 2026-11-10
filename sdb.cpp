@@ -228,13 +228,13 @@ void print_help(const std::string& topic) {
         {"watch", "watch <address|symbol> [1|2|4|8]\nSet a hardware write watchpoint (four slots, aligned address).\n"},
         {"rwatch", "rwatch <address|symbol> [1|2|4|8]\nSet a read watchpoint. x86 has no read-only watchpoint, so writes also trigger.\n"},
         {"awatch", "awatch <address|symbol> [1|2|4|8]\nSet a read/write (access) watchpoint; same encoding as rwatch.\n"},
-        {"unwatch", "unwatch <watchpoint id>\nRemove a hardware watchpoint.\n"},
+        {"unwatch", "unwatch <watchpoint id|all>\nRemove one or all hardware watchpoints.\n"},
         {"catch", "catch syscall [all|off|decimal number]\nCapture syscall entries and exits (Linux 5.3+).\n"},
         {"info", "info breakpoints | watchpoints | registers [name] | proc [mappings] | sharedlibrary\n"
                  "Show debugger and target state.\n"},
         {"delete", "delete <id> | delete all (alias del)\nRemove software breakpoints and restore their original bytes.\n"},
-        {"enable", "enable <id>\nRevalidate permissions and re-arm a disabled breakpoint.\n"},
-        {"disable", "disable <id>\nRestore the original byte but keep the breakpoint metadata.\n"},
+        {"disable", "disable <id> | disable all\nRestore the original byte but keep the breakpoint metadata.\n"},
+        {"enable", "enable <id> | enable all\nRevalidate permissions and re-arm disabled breakpoints.\n"},
         {"anchor", "anchor\nCapture a snapshot of private writable memory, registers and FP/XSAVE state.\n"},
         {"timetravel", "timetravel\nRestore the most recent anchor; mappings must be unchanged.\n"},
         {"help", "help [command]\nShow general help or details for one command.\n"},
@@ -658,8 +658,9 @@ void Debugger::run(char** argv, const Elf64_Ehdr& elf, bool inherit_stdin) {
                 if (!count || count > 4096) throw std::runtime_error("byte count must be 1..4096");
                 examine_memory(resolve_address(args[1]), count);
             } else if (command == "delete" || command == "enable" || command == "disable") {
-                if (command == "delete" && args.size() == 2 && args[1] == "all") {
-                    delete_all_breakpoints();
+                if (args.size() == 2 && args[1] == "all") {
+                    if (command == "delete") delete_all_breakpoints();
+                    else set_all_breakpoints(command == "enable");
                 } else {
                     if (args.size() != 2) throw std::runtime_error("usage: " + command + " <breakpoint id>");
                     uint64_t id = parse_number(args[1], 10);
@@ -765,6 +766,36 @@ void Debugger::delete_all_breakpoints() {
     }
     std::cout << "** deleted " << removed << (removed == 1 ? " breakpoint" : " breakpoints") << ".\n";
     if (unarmed) std::cout << "** warning: " << unarmed << " breakpoint(s) could not be restored.\n";
+}
+
+void Debugger::set_all_breakpoints(bool enable) {
+    unsigned changed = 0, failed = 0;
+    for (auto& [address, bp] : breakpoints_) {
+        if (bp.internal || bp.enabled == enable) continue;
+        if (enable) {
+            try {
+                require_executable(address);
+                auto original = read_memory(address, 1)[0];
+                write_byte(address, 0xcc);
+                bp.original = original;
+                bp.enabled = true;
+                ++changed;
+            } catch (const std::exception&) {
+                ++failed;
+            }
+        } else {
+            if (mapped(address)) {
+                try { write_byte(address, bp.original); }
+                catch (const std::exception&) { ++failed; continue; }
+            }
+            bp.enabled = false;
+            ++changed;
+        }
+    }
+    std::cout << "** " << (enable ? "enabled " : "disabled ") << changed << " breakpoint"
+              << (changed == 1 ? "" : "s") << ".\n";
+    if (failed) std::cout << "** warning: " << failed << " breakpoint(s) could not be "
+                          << (enable ? "enabled" : "disabled") << ".\n";
 }
 
 void Debugger::manage_breakpoint(const std::string& command, unsigned id) {

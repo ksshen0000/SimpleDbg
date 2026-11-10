@@ -232,7 +232,18 @@ void Debugger::watch_command(const std::vector<std::string>& args) {
     };
     auto control = static_cast<unsigned long>(trace(PTRACE_PEEKUSER, debug_base + 7 * sizeof(unsigned long)));
     if (args[0] == "unwatch") {
-        if (args.size() != 2) throw std::runtime_error("usage: unwatch <watchpoint id>");
+        if (args.size() != 2) throw std::runtime_error("usage: unwatch <watchpoint id|all>");
+        if (args[1] == "all") {
+            unsigned long updated = control;
+            for (const auto& [slot, watch] : watches_) {
+                updated &= ~(3ul << (2 * slot)) & ~(15ul << (16 + 4 * slot));
+            }
+            if (!watches_.empty()) put(7, updated);
+            unsigned removed = static_cast<unsigned>(watches_.size());
+            watches_.clear();
+            std::cout << "** removed " << removed << " watchpoint" << (removed == 1 ? "" : "s") << ".\n";
+            return;
+        }
         auto id = number(args[1], 10);
         auto found = std::find_if(watches_.begin(), watches_.end(), [id](const auto& item) { return item.second.id == id; });
         if (found == watches_.end()) throw std::runtime_error("watchpoint id not found");

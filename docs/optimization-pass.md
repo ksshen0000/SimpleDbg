@@ -64,8 +64,8 @@ python3 tests/bench.py --sdb build-release/sdb
 
 ## 4. 验证
 
-- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；84 项测试
-  （集成 52、工作流 24、故障注入 8）。
+- Debug 构建（`-DBUILD_TESTING=ON`）：`ctest` 3/3 通过；86 项测试
+  （集成 53、工作流 25、故障注入 8）。
 - Release 构建：`ctest` 3/3 通过。
 - 回放：`python3 tests/replay_demo.py --extended` 31/31 通过。
 - 本机缺少静态 libc，静态目标被自动跳过；46 项集成测试仍全部执行。
@@ -157,3 +157,9 @@ python3 tests/bench.py --sdb build-release/sdb
 - 新增 `x/s <address|symbol|$register>[+/-N] [max]`：按 NUL 结尾打印字符串，转义换行/
   制表/反斜杠/引号与非可打印字节；默认 128 字节，上限 4096；未找到 NUL 时明确标注。
 - 新增集成测试覆盖正常字符串、缺参、0 与越界参数；测试总数 84。
+
+### 批次 11：批量启用/停用
+
+- `enable all` / `disable all` 批量管理软件断点；`unwatch all` 一次释放全部硬件槽位。
+- 部分失败单独计数告警，不掩盖已成功或失败的断点。
+- 新增集成测试覆盖全部启用/停用与监视点清空；测试总数 86。
